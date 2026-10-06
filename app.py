@@ -1,8 +1,6 @@
 import uuid
-import base64
 import json
 import urllib.request
-import urllib.error
 
 import streamlit as st
 
@@ -128,10 +126,45 @@ st.divider()
 
 st.subheader("🚀 Create New Video Job")
 
-url = st.text_input(
-    "YouTube Video URL",
-    placeholder="https://www.youtube.com/watch?v=...",
+input_mode = st.selectbox(
+    "What do you want to create?",
+    [
+        "YouTube Video URL",
+        "Topic",
+        "Idea",
+        "Keyword",
+    ],
 )
+
+
+# =========================
+# INPUT
+# =========================
+
+if input_mode == "YouTube Video URL":
+
+    input_value = st.text_input(
+        "YouTube Video URL",
+        placeholder="https://www.youtube.com/watch?v=...",
+    )
+
+else:
+
+    input_value = st.text_input(
+        input_mode,
+        placeholder=f"Enter your {input_mode.lower()}...",
+    )
+
+
+reference_url = st.text_input(
+    "Reference URL (Optional)",
+    placeholder="Paste a YouTube video/channel/reference URL...",
+)
+
+
+# =========================
+# CREATE BUTTON
+# =========================
 
 if st.button(
     "🚀 CREATE VIDEO JOB",
@@ -139,10 +172,13 @@ if st.button(
     use_container_width=True,
 ):
 
-    if not url.strip():
-        st.warning("Please enter a YouTube URL.")
+    if not input_value.strip():
 
-    else:
+        st.warning(
+            f"Please enter a {input_mode.lower()}."
+        )
+
+    elif input_mode == "YouTube Video URL":
 
         try:
             job_id = uuid.uuid4().hex
@@ -150,7 +186,12 @@ if st.button(
             job = create_job(
                 job_id=job_id,
                 job_type="download",
-                input_value=url.strip(),
+                input_value=input_value.strip(),
+                reference_url=(
+                    reference_url.strip()
+                    if reference_url.strip()
+                    else None
+                ),
             )
 
             github_token = st.secrets["GITHUB_TOKEN"]
@@ -160,7 +201,9 @@ if st.button(
                 job=job.to_dict(),
             )
 
-            st.success("✅ Job successfully sent to GitHub queue.")
+            st.success(
+                "✅ Job successfully sent to GitHub queue."
+            )
 
             st.write("Job ID")
             st.code(job_id)
@@ -173,8 +216,19 @@ if st.button(
             )
 
         except Exception as e:
-            st.error("❌ Failed to create job.")
+
+            st.error(
+                "❌ Failed to create job."
+            )
+
             st.exception(e)
+
+    else:
+
+        st.info(
+            f"🧠 {input_mode} input received. "
+            "Research Engine will process this type in the next V2 stage."
+        )
 
 
 st.divider()
@@ -189,22 +243,48 @@ st.subheader("📋 Recent Jobs")
 if st.button("🔄 Refresh Jobs"):
 
     try:
+
         github_token = st.secrets["GITHUB_TOKEN"]
 
         jobs = get_github_jobs(github_token)
 
         if not jobs:
+
             st.info("No jobs found.")
 
         else:
 
             for job in jobs[:10]:
 
-                job_id = job.get("job_id", "Unknown")
-                status = job.get("status", "unknown")
-                job_type = job.get("job_type", "unknown")
-                input_value = job.get("input_value", "")
-                created_at = job.get("created_at", "")
+                job_id = job.get(
+                    "job_id",
+                    "Unknown"
+                )
+
+                status = job.get(
+                    "status",
+                    "unknown"
+                )
+
+                job_type = job.get(
+                    "job_type",
+                    "unknown"
+                )
+
+                input_value = job.get(
+                    "input_value",
+                    ""
+                )
+
+                reference_url = job.get(
+                    "reference_url",
+                    ""
+                )
+
+                created_at = job.get(
+                    "created_at",
+                    ""
+                )
 
                 with st.container(border=True):
 
@@ -213,42 +293,68 @@ if st.button("🔄 Refresh Jobs"):
                     )
 
                     with col1:
+
                         st.write(
                             f"**{job_id}**"
                         )
+
                         st.caption(
                             input_value
                         )
+
+                        if reference_url:
+
+                            st.caption(
+                                f"Reference: {reference_url}"
+                            )
 
                     with col2:
 
                         status_upper = status.upper()
 
                         if status_upper == "COMPLETED":
-                            st.success(status_upper)
+
+                            st.success(
+                                status_upper
+                            )
 
                         elif status_upper == "FAILED":
-                            st.error(status_upper)
+
+                            st.error(
+                                status_upper
+                            )
 
                         elif status_upper in (
                             "DOWNLOADING",
                             "PROCESSING",
                         ):
-                            st.warning(status_upper)
+
+                            st.warning(
+                                status_upper
+                            )
 
                         else:
-                            st.info(status_upper)
+
+                            st.info(
+                                status_upper
+                            )
 
                     with col3:
+
                         st.caption(
                             f"Type: {job_type}"
                         )
+
                         st.caption(
                             created_at
                         )
 
     except Exception as e:
-        st.error("Could not load jobs.")
+
+        st.error(
+            "Could not load jobs."
+        )
+
         st.exception(e)
 
 else:
@@ -268,4 +374,4 @@ st.divider()
 st.caption(
     "Auto Faceless Video Creator V2 • "
     "Streamlit → GitHub → Termux Worker"
-)
+                )
