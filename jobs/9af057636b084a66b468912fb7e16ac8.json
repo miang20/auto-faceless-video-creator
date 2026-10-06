@@ -2,7 +2,7 @@
   "job_id": "9af057636b084a66b468912fb7e16ac8",
   "job_type": "test",
   "input_value": "connection-test",
-  "status": "queued",
+  "status": "running",
   "result_path": null,
   "error": null,
   "created_at": "2026-10-06T13:23:14.197737+00:00"
