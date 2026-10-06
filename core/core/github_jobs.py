@@ -4,7 +4,7 @@ import urllib.request
 import urllib.error
 
 
-REPO_OWNER = "Mian-Faisal"
+REPO_OWNER = "miang20"
 REPO_NAME = "auto-faceless-video-creator"
 
 
