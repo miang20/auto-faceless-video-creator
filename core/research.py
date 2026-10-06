@@ -1,4 +1,5 @@
 import json
+import re
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -55,7 +56,6 @@ def search_youtube(query: str, limit: int = 10) -> list:
     results = []
 
     marker = "ytInitialData"
-
     start = html.find(marker)
 
     if start == -1:
@@ -124,6 +124,7 @@ def search_youtube(query: str, limit: int = 10) -> list:
                         return
 
             for child in value.values():
+
                 walk(child)
 
                 if len(results) >= limit:
@@ -132,6 +133,7 @@ def search_youtube(query: str, limit: int = 10) -> list:
         elif isinstance(value, list):
 
             for child in value:
+
                 walk(child)
 
                 if len(results) >= limit:
@@ -141,6 +143,117 @@ def search_youtube(query: str, limit: int = 10) -> list:
 
     return results
 
+
+# =========================================================
+# SOURCE SCORING
+# =========================================================
+
+def score_source(
+    title: str,
+    topic: str,
+) -> int:
+    """
+    Calculate a simple relevance score for a YouTube source.
+    """
+
+    title_lower = title.lower()
+    topic_lower = topic.lower()
+
+    topic_words = re.findall(
+        r"\b[a-z0-9]+\b",
+        topic_lower,
+    )
+
+    if not topic_words:
+        return 0
+
+    score = 0
+
+    # Exact topic phrase
+    if topic_lower in title_lower:
+        score += 40
+
+    # Individual topic words
+    for word in topic_words:
+
+        if len(word) < 3:
+            continue
+
+        if word in title_lower:
+            score += 10
+
+    # Strong discovery keywords
+    discovery_keywords = [
+        "viral",
+        "crazy",
+        "insane",
+        "unbelievable",
+        "best",
+        "worst",
+        "top",
+        "moments",
+        "highlights",
+        "compilation",
+        "caught",
+        "shocking",
+        "unexpected",
+        "rare",
+        "amazing",
+        "wild",
+    ]
+
+    for keyword in discovery_keywords:
+
+        if keyword in title_lower:
+            score += 3
+
+    return score
+
+
+def rank_sources(
+    sources: list,
+    topic: str,
+) -> list:
+    """
+    Score and rank research sources by relevance.
+    """
+
+    ranked = []
+
+    for source in sources:
+
+        title = source.get(
+            "title",
+            "",
+        )
+
+        score = score_source(
+            title=title,
+            topic=topic,
+        )
+
+        ranked_source = dict(source)
+
+        ranked_source["relevance_score"] = score
+
+        ranked.append(
+            ranked_source
+        )
+
+    ranked.sort(
+        key=lambda item: item.get(
+            "relevance_score",
+            0,
+        ),
+        reverse=True,
+    )
+
+    return ranked
+
+
+# =========================================================
+# MAIN RESEARCH ENGINE
+# =========================================================
 
 def research_topic(
     topic: str,
@@ -162,6 +275,7 @@ def research_topic(
         topic,
         f"{topic} latest",
         f"{topic} viral",
+        f"{topic} moments",
     ]
 
     sources = []
@@ -196,12 +310,22 @@ def research_topic(
         if len(sources) >= limit:
             break
 
+    ranked_sources = rank_sources(
+        sources=sources,
+        topic=topic,
+    )
+
     return {
         "topic": topic,
         "reference_url": reference_url,
-        "sources": sources,
+        "source_count": len(ranked_sources),
+        "sources": ranked_sources,
     }
 
+
+# =========================================================
+# SAVE RESEARCH
+# =========================================================
 
 def save_research(
     research: dict,
