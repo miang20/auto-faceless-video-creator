@@ -1,0 +1,296 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+from core.jobs import create_job
+from core.job_store import save_job, load_job
+from core.github_jobs import create_github_job
+from core.downloader import download_video
+from core.pipeline import execute_video_pipeline
+
+
+def create_and_store_job(
+    job_id: str,
+    job_type: str,
+    input_value: str,
+    reference_url: Optional[str] = None,
+) -> dict:
+    """
+    Create a job object and persist it locally.
+    """
+
+    job = create_job(
+        job_id=job_id,
+        job_type=job_type,
+        input_value=input_value,
+        reference_url=reference_url,
+    )
+
+    save_job(job)
+
+    return job.to_dict()
+
+
+def submit_job_to_github(
+    token: str,
+    job: dict,
+) -> str:
+    """
+    Push a queued job to the GitHub jobs directory.
+    """
+
+    return create_github_job(
+        token=token,
+        job=job,
+    )
+
+
+def download_job_video(
+    job: dict,
+    output_dir: str | Path = "downloads",
+) -> str:
+    """
+    Download the source video for a video-based job.
+
+    The existing downloader remains responsible for downloading.
+    """
+
+    input_value = job.get("input_value")
+
+    if not input_value:
+        raise ValueError("Job does not contain an input_value.")
+
+    downloaded_path = download_video(input_value)
+
+    source = Path(downloaded_path)
+
+    if not source.exists():
+        raise FileNotFoundError(
+            f"Downloaded video was not found: {downloaded_path}"
+        )
+
+    destination_dir = Path(output_dir)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    destination = destination_dir / source.name
+
+    if source.resolve() != destination.resolve():
+        destination.write_bytes(source.read_bytes())
+
+    return str(destination)
+
+
+def update_job_status(
+    job_id: str,
+    status: str,
+    result_path: Optional[str] = None,
+    error: Optional[str] = None,
+) -> dict:
+    """
+    Update an existing persisted job.
+    """
+
+    job = load_job(job_id)
+
+    job["status"] = status
+
+    if result_path is not None:
+        job["result_path"] = result_path
+
+    if error is not None:
+        job["error"] = error
+
+    if status != "failed":
+        job["error"] = None
+
+    from pathlib import Path
+    import json
+
+    job_file = (
+        Path(__file__).resolve().parent.parent
+        / "jobs"
+        / f"{job_id}.json"
+    )
+
+    job_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with job_file.open("w", encoding="utf-8") as file:
+        json.dump(
+            job,
+            file,
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    return job
+
+
+def run_video_job(
+    job_id: str,
+    whisper_command: Optional[str] = None,
+    model_path: Optional[str] = None,
+    language: str = "en",
+    max_clips: int = 10,
+    output_dir: str | Path = "output/jobs",
+    make_vertical: bool = True,
+    keep_audio: bool = False,
+) -> dict:
+    """
+    Execute a stored video job through the complete pipeline.
+
+    Flow:
+
+    Job
+      ↓
+    Download
+      ↓
+    Transcription
+      ↓
+    Clip Analysis
+      ↓
+    Video Processing
+      ↓
+    Optional Script Generation
+      ↓
+    Result
+    """
+
+    job = load_job(job_id)
+
+    try:
+        update_job_status(
+            job_id=job_id,
+            status="downloading",
+        )
+
+        video_path = download_job_video(
+            job=job,
+        )
+
+        update_job_status(
+            job_id=job_id,
+            status="processing",
+        )
+
+        result = execute_video_pipeline(
+            video_path=video_path,
+            topic=job.get("input_value"),
+            reference_url=job.get("reference_url"),
+            whisper_command=whisper_command,
+            model_path=model_path,
+            language=language,
+            max_clips=max_clips,
+            output_dir=output_dir,
+            make_vertical=make_vertical,
+            keep_audio=keep_audio,
+        )
+
+        if not result.get("success"):
+            error = result.get(
+                "error",
+                "Pipeline execution failed.",
+            )
+
+            update_job_status(
+                job_id=job_id,
+                status="failed",
+                error=error,
+            )
+
+            return result
+
+        result_file = (
+            Path(output_dir)
+            / f"{job_id}_result.json"
+        )
+
+        import json
+
+        result_file.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        with result_file.open(
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                result,
+                file,
+                indent=2,
+                ensure_ascii=False,
+            )
+
+        update_job_status(
+            job_id=job_id,
+            status="completed",
+            result_path=str(result_file),
+        )
+
+        result["job_id"] = job_id
+        result["result_path"] = str(result_file)
+
+        return result
+
+    except Exception as exc:
+        update_job_status(
+            job_id=job_id,
+            status="failed",
+            error=str(exc),
+        )
+
+        return {
+            "success": False,
+            "status": "failed",
+            "job_id": job_id,
+            "error": str(exc),
+        }
+
+
+def submit_and_run_video_job(
+    token: str,
+    job_id: str,
+    input_value: str,
+    reference_url: Optional[str] = None,
+    job_type: str = "video",
+    whisper_command: Optional[str] = None,
+    model_path: Optional[str] = None,
+    language: str = "en",
+    max_clips: int = 10,
+    output_dir: str | Path = "output/jobs",
+    make_vertical: bool = True,
+    keep_audio: bool = False,
+) -> dict:
+    """
+    Convenience function for creating, storing,
+    submitting, and executing a video job.
+    """
+
+    job = create_and_store_job(
+        job_id=job_id,
+        job_type=job_type,
+        input_value=input_value,
+        reference_url=reference_url,
+    )
+
+    github_path = submit_job_to_github(
+        token=token,
+        job=job,
+    )
+
+    result = run_video_job(
+        job_id=job_id,
+        whisper_command=whisper_command,
+        model_path=model_path,
+        language=language,
+        max_clips=max_clips,
+        output_dir=output_dir,
+        make_vertical=make_vertical,
+        keep_audio=keep_audio,
+    )
+
+    result["github_job_path"] = github_path
+
+    return result
