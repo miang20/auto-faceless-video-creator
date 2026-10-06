@@ -1,0 +1,9 @@
+{
+  "job_id": "9ad6555f2a32466b8101ed6101bdd30e",
+  "job_type": "test",
+  "input_value": "connection-test",
+  "status": "queued",
+  "result_path": null,
+  "error": null,
+  "created_at": "2026-10-06T13:23:19.946030+00:00"
+}
