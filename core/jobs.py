@@ -30,4 +30,4 @@ def create_job(
         input_value=input_value,
         reference_url=reference_url,
         created_at=datetime.now(timezone.utc).isoformat(),
-    )
+)
