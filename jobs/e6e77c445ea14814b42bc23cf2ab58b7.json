@@ -2,7 +2,7 @@
   "job_id": "e6e77c445ea14814b42bc23cf2ab58b7",
   "job_type": "download",
   "input_value": "https://youtube.com/shorts/IJsivdiG7R8?is=vF3h6APaECmyqNnP",
-  "status": "queued",
+  "status": "running",
   "result_path": null,
   "error": null,
   "created_at": "2026-10-06T14:17:36.989494+00:00"
