@@ -6,6 +6,7 @@ import streamlit as st
 
 from core.jobs import create_job
 from core.github_jobs import create_github_job
+from core.research import research_topic
 
 
 # =========================
@@ -64,8 +65,10 @@ def get_github_jobs(token: str):
                 )
 
                 with urllib.request.urlopen(
-                    file_request, timeout=15
+                    file_request,
+                    timeout=15,
                 ) as file_response:
+
                     job_data = json.loads(
                         file_response.read().decode("utf-8")
                     )
@@ -91,7 +94,9 @@ def get_github_jobs(token: str):
 # =========================
 
 st.title("🎬 Auto Faceless Video Creator")
-st.caption("V2 Control Center • GitHub Queue • Termux Worker")
+st.caption(
+    "V2 Control Center • Research • GitHub Queue • Termux Worker"
+)
 
 st.divider()
 
@@ -111,10 +116,10 @@ with status2:
     st.success("Job Queue\nReady")
 
 with status3:
-    st.success("Termux Worker\nReady")
+    st.success("Research Engine\nReady")
 
 with status4:
-    st.success("Download Engine\nReady")
+    st.success("Termux Worker\nReady")
 
 
 st.divider()
@@ -163,11 +168,18 @@ reference_url = st.text_input(
 
 
 # =========================
-# CREATE BUTTON
+# CREATE / RESEARCH BUTTON
 # =========================
 
+button_label = (
+    "🚀 CREATE VIDEO JOB"
+    if input_mode == "YouTube Video URL"
+    else "🔎 RESEARCH & FIND SOURCES"
+)
+
+
 if st.button(
-    "🚀 CREATE VIDEO JOB",
+    button_label,
     type="primary",
     use_container_width=True,
 ):
@@ -178,9 +190,14 @@ if st.button(
             f"Please enter a {input_mode.lower()}."
         )
 
+    # =========================
+    # EXISTING URL WORKFLOW
+    # =========================
+
     elif input_mode == "YouTube Video URL":
 
         try:
+
             job_id = uuid.uuid4().hex
 
             job = create_job(
@@ -223,12 +240,101 @@ if st.button(
 
             st.exception(e)
 
+    # =========================
+    # RESEARCH WORKFLOW
+    # =========================
+
     else:
 
-        st.info(
-            f"🧠 {input_mode} input received. "
-            "Research Engine will process this type in the next V2 stage."
-        )
+        try:
+
+            with st.spinner(
+                "🔎 Researching topic and finding relevant sources..."
+            ):
+
+                research = research_topic(
+                    topic=input_value.strip(),
+                    reference_url=(
+                        reference_url.strip()
+                        if reference_url.strip()
+                        else None
+                    ),
+                    limit=10,
+                )
+
+            sources = research.get(
+                "sources",
+                [],
+            )
+
+            if not sources:
+
+                st.warning(
+                    "No YouTube sources were found. "
+                    "Try a more specific topic or keyword."
+                )
+
+            else:
+
+                st.success(
+                    f"✅ Research complete — "
+                    f"{len(sources)} sources found."
+                )
+
+                st.subheader(
+                    "🎥 Research Sources"
+                )
+
+                for index, source in enumerate(
+                    sources,
+                    start=1,
+                ):
+
+                    title = source.get(
+                        "title",
+                        "Untitled",
+                    )
+
+                    video_url = source.get(
+                        "url",
+                        "",
+                    )
+
+                    video_id = source.get(
+                        "video_id",
+                        "",
+                    )
+
+                    with st.container(border=True):
+
+                        st.write(
+                            f"**{index}. {title}**"
+                        )
+
+                        st.caption(
+                            f"Video ID: {video_id}"
+                        )
+
+                        if video_url:
+
+                            st.link_button(
+                                "▶️ Open YouTube Video",
+                                video_url,
+                            )
+
+                st.info(
+                    "Research layer is now connected. "
+                    "Next stage will automatically analyze/select "
+                    "the strongest sources and clips."
+                )
+
+        except Exception as e:
+
+            st.error(
+                "❌ Research failed."
+            )
+
+            st.exception(e)
 
 
 st.divider()
@@ -258,32 +364,32 @@ if st.button("🔄 Refresh Jobs"):
 
                 job_id = job.get(
                     "job_id",
-                    "Unknown"
+                    "Unknown",
                 )
 
                 status = job.get(
                     "status",
-                    "unknown"
+                    "unknown",
                 )
 
                 job_type = job.get(
                     "job_type",
-                    "unknown"
+                    "unknown",
                 )
 
                 input_value = job.get(
                     "input_value",
-                    ""
+                    "",
                 )
 
                 reference_url = job.get(
                     "reference_url",
-                    ""
+                    "",
                 )
 
                 created_at = job.get(
                     "created_at",
-                    ""
+                    "",
                 )
 
                 with st.container(border=True):
@@ -373,5 +479,5 @@ st.divider()
 
 st.caption(
     "Auto Faceless Video Creator V2 • "
-    "Streamlit → GitHub → Termux Worker"
-                )
+    "Input → Research → Sources → GitHub → Termux"
+)
