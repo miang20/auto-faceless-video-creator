@@ -1,0 +1,10 @@
+{
+  "job_id": "8c5f5aa8d0ad4e139937cb0e9430b952",
+  "job_type": "video",
+  "input_value": "https://youtube.com/shorts/i1WRXL74Hn4?si=eL3KYjlP-wXqqREb",
+  "reference_url": null,
+  "status": "queued",
+  "result_path": null,
+  "error": null,
+  "created_at": "2026-10-07T02:58:02.301888+00:00"
+}
