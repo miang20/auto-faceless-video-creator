@@ -175,6 +175,7 @@ def display_job_status(status: str):
 st.title(
     "🎬 Auto Faceless Video Creator"
 )
+st.caption("Pro V2 • Clean Streamlit UI")
 
 st.caption(
     "V2 Control Center • "
