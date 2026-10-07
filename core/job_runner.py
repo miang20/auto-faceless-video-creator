@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,10 @@ def create_and_store_job(
     job_type: str,
     input_value: str,
     reference_url: Optional[str] = None,
+    duration: int = 30,
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[dict] = None,
+    editing_settings: Optional[dict] = None,
 ) -> dict:
     """
     Create a job object and persist it locally.
@@ -25,6 +30,10 @@ def create_and_store_job(
         job_type=job_type,
         input_value=input_value,
         reference_url=reference_url,
+        duration=duration,
+        caption_style=caption_style,
+        caption_settings=caption_settings,
+        editing_settings=editing_settings,
     )
 
     save_job(job)
@@ -53,13 +62,15 @@ def download_job_video(
     """
     Download the source video for a video-based job.
 
-    The existing downloader remains responsible for downloading.
+    Existing downloader remains unchanged.
     """
 
     input_value = job.get("input_value")
 
     if not input_value:
-        raise ValueError("Job does not contain an input_value.")
+        raise ValueError(
+            "Job does not contain an input_value."
+        )
 
     downloaded_path = download_video(input_value)
 
@@ -71,12 +82,17 @@ def download_job_video(
         )
 
     destination_dir = Path(output_dir)
-    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     destination = destination_dir / source.name
 
     if source.resolve() != destination.resolve():
-        destination.write_bytes(source.read_bytes())
+        destination.write_bytes(
+            source.read_bytes()
+        )
 
     return str(destination)
 
@@ -104,18 +120,21 @@ def update_job_status(
     if status != "failed":
         job["error"] = None
 
-    from pathlib import Path
-    import json
-
     job_file = (
         Path(__file__).resolve().parent.parent
         / "jobs"
         / f"{job_id}.json"
     )
 
-    job_file.parent.mkdir(parents=True, exist_ok=True)
+    job_file.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    with job_file.open("w", encoding="utf-8") as file:
+    with job_file.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
         json.dump(
             job,
             file,
@@ -137,23 +156,21 @@ def run_video_job(
     keep_audio: bool = False,
 ) -> dict:
     """
-    Execute a stored video job through the complete pipeline.
+    Execute a stored video job.
+
+    Existing download stage is intentionally preserved.
 
     Flow:
 
-    Job
-      ↓
-    Download
-      ↓
-    Transcription
-      ↓
-    Clip Analysis
-      ↓
-    Video Processing
-      ↓
-    Optional Script Generation
-      ↓
-    Result
+        Job
+          ↓
+        Download
+          ↓
+        Pro V2 Pipeline
+          ↓
+        Final processing
+          ↓
+        Result
     """
 
     job = load_job(job_id)
@@ -164,6 +181,7 @@ def run_video_job(
             status="downloading",
         )
 
+        # Existing downloader — DO NOT MODIFY.
         video_path = download_job_video(
             job=job,
         )
@@ -172,6 +190,34 @@ def run_video_job(
             job_id=job_id,
             status="processing",
         )
+
+        # Read Pro V2 settings from the stored GitHub/local job.
+        duration = job.get(
+            "duration",
+            30,
+        )
+
+        caption_style = job.get(
+            "caption_style",
+            "Bold Viral",
+        )
+
+        caption_settings = job.get(
+            "caption_settings",
+            {},
+        )
+
+        editing_settings = job.get(
+            "editing_settings",
+            {},
+        )
+
+        # Keep job-level vertical setting authoritative when present.
+        if isinstance(editing_settings, dict):
+            make_vertical = editing_settings.get(
+                "make_vertical",
+                make_vertical,
+            )
 
         result = execute_video_pipeline(
             video_path=video_path,
@@ -184,6 +230,10 @@ def run_video_job(
             output_dir=output_dir,
             make_vertical=make_vertical,
             keep_audio=keep_audio,
+            duration=duration,
+            caption_style=caption_style,
+            caption_settings=caption_settings,
+            editing_settings=editing_settings,
         )
 
         if not result.get("success"):
@@ -204,8 +254,6 @@ def run_video_job(
             Path(output_dir)
             / f"{job_id}_result.json"
         )
-
-        import json
 
         result_file.parent.mkdir(
             parents=True,
@@ -262,10 +310,14 @@ def submit_and_run_video_job(
     output_dir: str | Path = "output/jobs",
     make_vertical: bool = True,
     keep_audio: bool = False,
+    duration: int = 30,
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[dict] = None,
+    editing_settings: Optional[dict] = None,
 ) -> dict:
     """
     Convenience function for creating, storing,
-    submitting, and executing a video job.
+    submitting, and executing a Pro V2 video job.
     """
 
     job = create_and_store_job(
@@ -273,6 +325,10 @@ def submit_and_run_video_job(
         job_type=job_type,
         input_value=input_value,
         reference_url=reference_url,
+        duration=duration,
+        caption_style=caption_style,
+        caption_settings=caption_settings,
+        editing_settings=editing_settings,
     )
 
     github_path = submit_job_to_github(
