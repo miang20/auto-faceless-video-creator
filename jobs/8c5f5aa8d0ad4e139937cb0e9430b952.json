@@ -3,8 +3,8 @@
   "job_type": "video",
   "input_value": "https://youtube.com/shorts/i1WRXL74Hn4?si=eL3KYjlP-wXqqREb",
   "reference_url": null,
-  "status": "running",
+  "status": "failed",
   "result_path": null,
-  "error": null,
+  "error": "ERROR: The downloaded file is empty",
   "created_at": "2026-10-07T02:58:02.301888+00:00"
 }
