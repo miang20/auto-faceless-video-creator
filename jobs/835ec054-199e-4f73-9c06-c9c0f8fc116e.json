@@ -32,8 +32,8 @@
     "dynamic_zoom": true,
     "remove_silence": true
   },
-  "status": "failed",
+  "status": "running",
   "result_path": null,
-  "error": "Whisper executable was not found. Provide whisper_command explicitly.",
+  "error": null,
   "created_at": "2026-10-07T08:30:55.422343+00:00"
 }
