@@ -1,30 +1,170 @@
+from __future__ import annotations
+
 import json
 import re
 import urllib.parse
 import urllib.request
-import urllib.error
+from pathlib import Path
+from typing import Iterable
 
 
-YOUTUBE_SEARCH_URL = "https://www.youtube.com/results?search_query="
+YOUTUBE_SEARCH_URL = (
+    "https://www.youtube.com/results?search_query={query}"
+)
 
 
-def search_youtube(query: str, limit: int = 10) -> list:
+DISCOVERY_TERMS = (
+    "viral",
+    "reaction",
+    "moment",
+    "incident",
+    "caught",
+    "highlights",
+    "breaking",
+    "aftermath",
+    "alternate angle",
+    "interview",
+    "behind the scenes",
+    "explained",
+)
+
+
+def _clean_text(value: str) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        str(value or ""),
+    ).strip()
+
+
+def _normalize_query(value: str) -> str:
+    value = _clean_text(value)
+
+    value = re.sub(
+        r"[^\w\s\-]",
+        " ",
+        value,
+        flags=re.UNICODE,
+    )
+
+    return re.sub(
+        r"\s+",
+        " ",
+        value,
+    ).strip()
+
+
+def _tokenize(value: str) -> set[str]:
+    words = re.findall(
+        r"[a-zA-Z0-9']+",
+        value.lower(),
+    )
+
+    stop_words = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "this",
+        "that",
+        "from",
+        "into",
+        "what",
+        "when",
+        "where",
+        "your",
+        "have",
+        "has",
+        "was",
+        "were",
+        "are",
+        "you",
+        "how",
+        "why",
+        "who",
+    }
+
+    return {
+        word
+        for word in words
+        if len(word) > 2
+        and word not in stop_words
+    }
+
+
+def _build_search_queries(
+    topic: str,
+    reference_url: str | None = None,
+) -> list[str]:
     """
-    Search YouTube for a topic/keyword and return basic video results.
+    Build diverse discovery queries around the reference topic.
+
+    The goal is NOT to repeatedly search the exact same phrase.
+    We want different footage angles and contextual sources.
     """
 
-    query = query.strip()
+    topic = _normalize_query(topic)
+
+    if not topic:
+        return []
+
+    queries = [
+        topic,
+        f"{topic} latest",
+        f"{topic} viral moment",
+        f"{topic} reaction",
+        f"{topic} incident",
+        f"{topic} highlights",
+        f"{topic} caught on camera",
+        f"{topic} aftermath",
+        f"{topic} alternate angle",
+        f"{topic} interview",
+    ]
+
+    # A reference URL is useful as a signal that this is a
+    # reference-driven workflow, but we intentionally do not
+    # search the URL itself.
+    if reference_url:
+        queries.extend([
+            f"{topic} context",
+            f"{topic} full moment",
+            f"{topic} before after",
+        ])
+
+    seen = set()
+    result = []
+
+    for query in queries:
+        normalized = _normalize_query(query)
+
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+
+    return result
+
+
+def search_youtube(
+    query: str,
+    limit: int = 10,
+) -> list[dict]:
+    """
+    Search public YouTube results without requiring an API key.
+    """
+
+    query = _normalize_query(query)
 
     if not query:
         return []
 
-    search_url = (
-        YOUTUBE_SEARCH_URL
-        + urllib.parse.quote_plus(query)
+    encoded_query = urllib.parse.quote_plus(query)
+
+    url = YOUTUBE_SEARCH_URL.format(
+        query=encoded_query,
     )
 
     request = urllib.request.Request(
-        search_url,
+        url,
         headers={
             "User-Agent": (
                 "Mozilla/5.0 "
@@ -32,7 +172,8 @@ def search_youtube(query: str, limit: int = 10) -> list:
                 "AppleWebKit/537.36 "
                 "(KHTML, like Gecko) "
                 "Chrome/131.0 Safari/537.36"
-            )
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
         },
     )
 
@@ -41,209 +182,358 @@ def search_youtube(query: str, limit: int = 10) -> list:
             request,
             timeout=20,
         ) as response:
-
             html = response.read().decode(
                 "utf-8",
-                errors="ignore",
+                errors="replace",
             )
-
-    except (
-        urllib.error.URLError,
-        TimeoutError,
-    ):
+    except Exception:
         return []
 
-    results = []
-
-    marker = "ytInitialData"
-    start = html.find(marker)
-
-    if start == -1:
-        return results
-
-    json_start = html.find(
-        "{",
-        start,
+    match = re.search(
+        r"ytInitialData\s*=\s*(\{.*?\});",
+        html,
+        flags=re.DOTALL,
     )
 
-    if json_start == -1:
-        return results
+    if not match:
+        return []
 
     try:
-
-        decoder = json.JSONDecoder()
-
-        data, _ = decoder.raw_decode(
-            html[json_start:]
-        )
-
+        data = json.loads(match.group(1))
     except json.JSONDecodeError:
-        return results
+        return []
 
-    def walk(value):
+    results: list[dict] = []
 
-        if len(results) >= limit:
-            return
-
-        if isinstance(value, dict):
-
-            renderer = value.get(
+    def walk(node):
+        if isinstance(node, dict):
+            renderer = node.get(
                 "videoRenderer"
             )
 
-            if renderer:
-
+            if isinstance(renderer, dict):
                 video_id = renderer.get(
                     "videoId"
                 )
 
-                title_runs = (
-                    renderer.get("title", {})
-                    .get("runs", [])
-                )
+                if video_id:
+                    title = ""
 
-                title = "".join(
-                    run.get("text", "")
-                    for run in title_runs
-                )
-
-                if video_id and title:
-
-                    results.append(
-                        {
-                            "video_id": video_id,
-                            "title": title,
-                            "url": (
-                                "https://www.youtube.com/watch?v="
-                                + video_id
-                            ),
-                        }
+                    title_data = renderer.get(
+                        "title",
+                        {},
                     )
 
-                    if len(results) >= limit:
-                        return
+                    if isinstance(title_data, dict):
+                        runs = title_data.get(
+                            "runs",
+                            [],
+                        )
 
-            for child in value.values():
+                        if runs:
+                            title = "".join(
+                                str(
+                                    run.get(
+                                        "text",
+                                        "",
+                                    )
+                                )
+                                for run in runs
+                            )
 
-                walk(child)
+                        if not title:
+                            title = str(
+                                title_data.get(
+                                    "simpleText",
+                                    "",
+                                )
+                            )
 
-                if len(results) >= limit:
-                    return
+                    channel = ""
 
-        elif isinstance(value, list):
+                    owner = renderer.get(
+                        "ownerText",
+                        {},
+                    )
 
-            for child in value:
+                    if isinstance(owner, dict):
+                        runs = owner.get(
+                            "runs",
+                            [],
+                        )
 
-                walk(child)
+                        if runs:
+                            channel = "".join(
+                                str(
+                                    run.get(
+                                        "text",
+                                        "",
+                                    )
+                                )
+                                for run in runs
+                            )
 
-                if len(results) >= limit:
-                    return
+                    length = ""
+
+                    length_text = renderer.get(
+                        "lengthText",
+                        {},
+                    )
+
+                    if isinstance(
+                        length_text,
+                        dict,
+                    ):
+                        length = str(
+                            length_text.get(
+                                "simpleText",
+                                "",
+                            )
+                        )
+
+                    view_text = ""
+
+                    view_data = renderer.get(
+                        "viewCountText",
+                        {},
+                    )
+
+                    if isinstance(
+                        view_data,
+                        dict,
+                    ):
+                        view_text = str(
+                            view_data.get(
+                                "simpleText",
+                                "",
+                            )
+                        )
+
+                    results.append({
+                        "video_id": video_id,
+                        "title": _clean_text(title),
+                        "channel": _clean_text(channel),
+                        "duration": length,
+                        "views_text": _clean_text(
+                            view_text
+                        ),
+                        "url": (
+                            "https://www.youtube.com/watch?v="
+                            + video_id
+                        ),
+                        "search_query": query,
+                    })
+
+            for value in node.values():
+                walk(value)
+
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
 
     walk(data)
 
-    return results
+    unique = []
+    seen_ids = set()
+
+    for item in results:
+        video_id = item.get("video_id")
+
+        if not video_id:
+            continue
+
+        if video_id in seen_ids:
+            continue
+
+        seen_ids.add(video_id)
+        unique.append(item)
+
+        if len(unique) >= limit:
+            break
+
+    return unique
 
 
-# =========================================================
-# SOURCE SCORING
-# =========================================================
+def _parse_view_count(value: str) -> int:
+    """
+    Convert common YouTube view strings into an approximate
+    integer score.
+    """
+
+    text = str(value or "").lower()
+    text = text.replace(
+        "views",
+        "",
+    ).strip()
+
+    match = re.search(
+        r"([\d,.]+)\s*([km]?)",
+        text,
+    )
+
+    if not match:
+        return 0
+
+    number_text = match.group(1)
+    suffix = match.group(2)
+
+    try:
+        number = float(
+            number_text.replace(
+                ",",
+                "",
+            )
+        )
+    except ValueError:
+        return 0
+
+    if suffix == "m":
+        number *= 1_000_000
+    elif suffix == "k":
+        number *= 1_000
+
+    return int(number)
+
 
 def score_source(
     title: str,
     topic: str,
-) -> int:
+    views_text: str = "",
+    channel: str = "",
+) -> float:
     """
-    Calculate a simple relevance score for a YouTube source.
+    Score a discovered source for relevance and usefulness.
+
+    This is a discovery score, not a guarantee of footage quality.
     """
 
-    title_lower = title.lower()
-    topic_lower = topic.lower()
+    title = _clean_text(title).lower()
+    topic = _clean_text(topic).lower()
 
-    topic_words = re.findall(
-        r"\b[a-z0-9]+\b",
-        topic_lower,
-    )
+    topic_words = _tokenize(topic)
+    title_words = _tokenize(title)
 
     if not topic_words:
-        return 0
+        return 0.0
 
-    score = 0
+    overlap = len(
+        topic_words.intersection(
+            title_words
+        )
+    )
 
-    # Exact topic phrase
-    if topic_lower in title_lower:
-        score += 40
+    relevance = (
+        overlap / max(len(topic_words), 1)
+    )
 
-    # Individual topic words
-    for word in topic_words:
+    score = relevance * 60.0
 
-        if len(word) < 3:
+    for keyword in DISCOVERY_TERMS:
+        if keyword in title:
+            score += 4.0
+
+    views = _parse_view_count(
+        views_text
+    )
+
+    if views >= 1_000_000:
+        score += 15.0
+    elif views >= 100_000:
+        score += 10.0
+    elif views >= 10_000:
+        score += 5.0
+
+    if channel:
+        score += 1.0
+
+    return round(
+        min(score, 100.0),
+        2,
+    )
+
+
+def _source_key(source: dict) -> str:
+    video_id = source.get(
+        "video_id"
+    )
+
+    if video_id:
+        return str(video_id)
+
+    url = source.get(
+        "url",
+        "",
+    )
+
+    return str(url).strip().lower()
+
+
+def _deduplicate_sources(
+    sources: Iterable[dict],
+) -> list[dict]:
+    seen = set()
+    result = []
+
+    for source in sources:
+        key = _source_key(source)
+
+        if not key:
             continue
 
-        if word in title_lower:
-            score += 10
+        if key in seen:
+            continue
 
-    # Strong discovery keywords
-    discovery_keywords = [
-        "viral",
-        "crazy",
-        "insane",
-        "unbelievable",
-        "best",
-        "worst",
-        "top",
-        "moments",
-        "highlights",
-        "compilation",
-        "caught",
-        "shocking",
-        "unexpected",
-        "rare",
-        "amazing",
-        "wild",
-    ]
+        seen.add(key)
+        result.append(source)
 
-    for keyword in discovery_keywords:
-
-        if keyword in title_lower:
-            score += 3
-
-    return score
+    return result
 
 
 def rank_sources(
-    sources: list,
+    sources: list[dict],
     topic: str,
-) -> list:
+) -> list[dict]:
     """
-    Score and rank research sources by relevance.
+    Rank sources by relevance + discovery value.
     """
 
     ranked = []
 
     for source in sources:
+        item = dict(source)
 
-        title = source.get(
-            "title",
-            "",
-        )
-
-        score = score_source(
-            title=title,
+        item["score"] = score_source(
+            title=item.get(
+                "title",
+                "",
+            ),
             topic=topic,
+            views_text=item.get(
+                "views_text",
+                "",
+            ),
+            channel=item.get(
+                "channel",
+                "",
+            ),
         )
 
-        ranked_source = dict(source)
-
-        ranked_source["relevance_score"] = score
-
-        ranked.append(
-            ranked_source
-        )
+        ranked.append(item)
 
     ranked.sort(
-        key=lambda item: item.get(
-            "relevance_score",
-            0,
+        key=lambda item: (
+            float(
+                item.get(
+                    "score",
+                    0,
+                )
+            ),
+            _parse_view_count(
+                item.get(
+                    "views_text",
+                    "",
+                )
+            ),
         ),
         reverse=True,
     )
@@ -251,93 +541,175 @@ def rank_sources(
     return ranked
 
 
-# =========================================================
-# MAIN RESEARCH ENGINE
-# =========================================================
+def select_diverse_sources(
+    sources: list[dict],
+    limit: int = 10,
+) -> list[dict]:
+    """
+    Prefer different channels and different discovery queries
+    so the result is not dominated by duplicates.
+    """
+
+    selected = []
+    used_channels = set()
+    used_queries = set()
+
+    # First pass: maximize diversity.
+    for source in sources:
+        if len(selected) >= limit:
+            break
+
+        channel = _clean_text(
+            source.get(
+                "channel",
+                "",
+            )
+        ).lower()
+
+        query = _clean_text(
+            source.get(
+                "search_query",
+                "",
+            )
+        ).lower()
+
+        if (
+            channel
+            and channel in used_channels
+        ):
+            continue
+
+        if (
+            query
+            and query in used_queries
+        ):
+            continue
+
+        selected.append(source)
+
+        if channel:
+            used_channels.add(channel)
+
+        if query:
+            used_queries.add(query)
+
+    # Second pass: fill remaining slots.
+    if len(selected) < limit:
+        selected_ids = {
+            _source_key(source)
+            for source in selected
+        }
+
+        for source in sources:
+            if len(selected) >= limit:
+                break
+
+            key = _source_key(source)
+
+            if key in selected_ids:
+                continue
+
+            selected.append(source)
+            selected_ids.add(key)
+
+    return selected
+
 
 def research_topic(
     topic: str,
     reference_url: str | None = None,
     limit: int = 10,
-) -> dict:
+) -> list[dict]:
     """
-    Research a topic and collect relevant YouTube sources.
+    Research a topic using multiple YouTube search angles.
+
+    Returns a ranked, deduplicated and diversity-aware source list.
     """
 
-    topic = topic.strip()
+    topic = _clean_text(topic)
 
     if not topic:
-        raise ValueError(
-            "Research topic cannot be empty."
-        )
+        return []
 
-    search_queries = [
-        topic,
-        f"{topic} latest",
-        f"{topic} viral",
-        f"{topic} moments",
-    ]
+    limit = max(
+        1,
+        int(limit),
+    )
 
-    sources = []
+    queries = _build_search_queries(
+        topic=topic,
+        reference_url=reference_url,
+    )
 
-    for query in search_queries:
+    all_sources = []
 
+    # Search a few results per query. This keeps the research
+    # lightweight while still producing multiple source angles.
+    per_query = max(
+        3,
+        min(
+            8,
+            limit,
+        ),
+    )
+
+    for query in queries:
         results = search_youtube(
             query=query,
-            limit=limit,
+            limit=per_query,
         )
 
-        for result in results:
+        all_sources.extend(results)
 
-            video_id = result.get(
-                "video_id"
-            )
+    unique_sources = _deduplicate_sources(
+        all_sources
+    )
 
-            if not video_id:
-                continue
-
-            if any(
-                item.get("video_id") == video_id
-                for item in sources
-            ):
-                continue
-
-            sources.append(result)
-
-            if len(sources) >= limit:
-                break
-
-        if len(sources) >= limit:
-            break
-
-    ranked_sources = rank_sources(
-        sources=sources,
+    ranked = rank_sources(
+        unique_sources,
         topic=topic,
     )
 
-    return {
-        "topic": topic,
-        "reference_url": reference_url,
-        "source_count": len(ranked_sources),
-        "sources": ranked_sources,
-    }
+    selected = select_diverse_sources(
+        ranked,
+        limit=limit,
+    )
 
+    # Final ordering is by research score.
+    selected.sort(
+        key=lambda item: float(
+            item.get(
+                "score",
+                0,
+            )
+        ),
+        reverse=True,
+    )
 
-# =========================================================
-# SAVE RESEARCH
-# =========================================================
+    return selected
+
 
 def save_research(
-    research: dict,
-    output_path: str,
+    research: list[dict],
+    output_path: str | Path,
 ) -> str:
+    """
+    Save research results as JSON.
+    """
 
-    with open(
-        output_path,
+    output_path = Path(
+        output_path
+    )
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with output_path.open(
         "w",
         encoding="utf-8",
     ) as file:
-
         json.dump(
             research,
             file,
@@ -345,4 +717,4 @@ def save_research(
             ensure_ascii=False,
         )
 
-    return output_path
+    return str(output_path)
