@@ -1,889 +1,789 @@
+"""
+Pro V2 Script Generator
+
+Builds a structured, no-narration short-form story from analyzed clips.
+
+The generator does NOT create voiceover narration.
+It creates an editing blueprint:
+HOOK -> SETUP -> ESCALATION -> REACTION -> PAYOFF -> ENDING
+
+The actual source audio/dialogue remains the primary storytelling layer.
+"""
+
 from __future__ import annotations
 
 import json
+import os
 import re
-from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 
-# =========================================================
-# CONFIG
-# =========================================================
-
-DEFAULT_MAX_POINTS = 8
-DEFAULT_MAX_SOURCES = 10
-DEFAULT_HOOK_COUNT = 5
+DEFAULT_TARGET_DURATION = 15.0
 
 
-# =========================================================
-# TEXT HELPERS
-# =========================================================
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
-def normalize_text(text: str) -> str:
-    if not text:
+
+def _clamp(
+    value: float,
+    minimum: float = 0.0,
+    maximum: float = 1.0,
+) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def _clean_text(value: Any) -> str:
+    if value is None:
         return ""
 
-    text = text.lower().strip()
-    text = re.sub(r"[^\w\s!?.,'-]", " ", text)
-    text = re.sub(r"\s+", " ", text)
-
-    return text
-
-
-def clean_text(text: str) -> str:
-    if not text:
-        return ""
-
-    text = re.sub(
+    return re.sub(
         r"\s+",
         " ",
-        str(text),
+        str(value),
+    ).strip()
+
+
+def _clip_role(clip: Dict[str, Any]) -> str:
+    return str(
+        clip.get("story_role")
+        or clip.get("role")
+        or "SETUP"
+    ).upper()
+
+
+def _clip_score(clip: Dict[str, Any]) -> float:
+    return _safe_float(
+        clip.get(
+            "score",
+            clip.get("final_score", 0.0),
+        )
     )
 
-    return text.strip()
 
-
-def extract_sentences(text: str) -> list[str]:
-    text = clean_text(text)
-
-    if not text:
-        return []
-
-    sentences = re.split(
-        r"(?<=[.!?])\s+",
-        text,
+def _clip_text(clip: Dict[str, Any]) -> str:
+    return _clean_text(
+        clip.get("text")
+        or clip.get("transcript")
+        or clip.get("caption")
+        or ""
     )
 
-    return [
-        sentence.strip()
-        for sentence in sentences
-        if sentence.strip()
+
+def _clip_start(clip: Dict[str, Any]) -> float:
+    return _safe_float(
+        clip.get(
+            "start",
+            clip.get("start_time", 0.0),
+        )
+    )
+
+
+def _clip_end(clip: Dict[str, Any]) -> float:
+    return _safe_float(
+        clip.get(
+            "end",
+            clip.get("end_time", 0.0),
+        )
+    )
+
+
+def _clip_duration(clip: Dict[str, Any]) -> float:
+    duration = _safe_float(
+        clip.get("duration")
+    )
+
+    if duration > 0:
+        return duration
+
+    return max(
+        0.0,
+        _clip_end(clip) - _clip_start(clip),
+    )
+
+
+def _hook_score(clip: Dict[str, Any]) -> float:
+    return _safe_float(
+        clip.get(
+            "hook_score",
+            clip.get("score", 0.0),
+        )
+    )
+
+
+def _find_best(
+    clips: Sequence[Dict[str, Any]],
+    roles: Sequence[str],
+) -> Optional[Dict[str, Any]]:
+
+    matching = [
+        clip
+        for clip in clips
+        if _clip_role(clip) in roles
     ]
 
+    if not matching:
+        return None
 
-def extract_keywords(
-    text: str,
-    max_keywords: int = 20,
-) -> list[str]:
-    """
-    Extract useful topic keywords.
-    """
-
-    normalized = normalize_text(text)
-
-    stop_words = {
-        "the",
-        "and",
-        "for",
-        "with",
-        "from",
-        "this",
-        "that",
-        "there",
-        "their",
-        "they",
-        "you",
-        "your",
-        "are",
-        "was",
-        "were",
-        "have",
-        "has",
-        "had",
-        "into",
-        "about",
-        "what",
-        "when",
-        "where",
-        "which",
-        "who",
-        "how",
-        "why",
-        "can",
-        "could",
-        "would",
-        "should",
-        "will",
-        "been",
-        "being",
-        "but",
-        "not",
-        "all",
-        "just",
-        "than",
-        "then",
-        "too",
-        "very",
-        "its",
-        "it's",
-        "his",
-        "her",
-        "our",
-        "their",
-        "a",
-        "an",
-        "of",
-        "to",
-        "in",
-        "on",
-        "at",
-        "is",
-        "it",
-    }
-
-    words = re.findall(
-        r"\b[a-z0-9][a-z0-9'-]*\b",
-        normalized,
+    return max(
+        matching,
+        key=lambda clip: (
+            _clip_score(clip),
+            _hook_score(clip),
+        ),
     )
 
-    result = []
+
+def _find_best_hook(
+    clips: Sequence[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+
+    if not clips:
+        return None
+
+    return max(
+        clips,
+        key=lambda clip: (
+            _hook_score(clip),
+            _clip_score(clip),
+        ),
+    )
+
+
+def _dedupe_clips(
+    clips: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+
+    result: List[Dict[str, Any]] = []
     seen = set()
 
-    for word in words:
+    for clip in clips:
 
-        if len(word) < 3:
-            continue
-
-        if word in stop_words:
-            continue
-
-        if word in seen:
-            continue
-
-        seen.add(word)
-        result.append(word)
-
-        if len(result) >= max_keywords:
-            break
-
-    return result
-
-
-# =========================================================
-# SOURCE EXTRACTION
-# =========================================================
-
-def get_source_title(
-    source: dict,
-) -> str:
-    return clean_text(
-        source.get(
-            "title",
-            "",
-        )
-    )
-
-
-def get_source_description(
-    source: dict,
-) -> str:
-    return clean_text(
-        source.get(
-            "description",
-            "",
-        )
-    )
-
-
-def get_source_url(
-    source: dict,
-) -> str:
-    return clean_text(
-        source.get(
-            "url",
-            "",
-        )
-    )
-
-
-def get_source_score(
-    source: dict,
-) -> float:
-    for key in (
-        "final_score",
-        "quality_score",
-        "relevance_score",
-    ):
-
-        value = source.get(
-            key
+        start = round(
+            _clip_start(clip),
+            2,
         )
 
-        try:
-
-            if value is not None:
-                return float(value)
-
-        except (
-            ValueError,
-            TypeError,
-        ):
-
-            continue
-
-    return 0.0
-
-
-def rank_script_sources(
-    sources: list[dict],
-    max_sources: int = DEFAULT_MAX_SOURCES,
-) -> list[dict]:
-    """
-    Select the strongest available research sources.
-    """
-
-    if not sources:
-        return []
-
-    unique = []
-    seen_ids = set()
-    seen_urls = set()
-
-    for source in sources:
-
-        video_id = source.get(
-            "video_id"
+        end = round(
+            _clip_end(clip),
+            2,
         )
 
-        url = get_source_url(
-            source
+        key = (
+            start,
+            end,
+            _clip_text(clip)[:80],
         )
-
-        if video_id and video_id in seen_ids:
-            continue
-
-        if url and url in seen_urls:
-            continue
-
-        if video_id:
-            seen_ids.add(
-                video_id
-            )
-
-        if url:
-            seen_urls.add(
-                url
-            )
-
-        unique.append(
-            dict(source)
-        )
-
-    unique.sort(
-        key=get_source_score,
-        reverse=True,
-    )
-
-    return unique[
-        :max_sources
-    ]
-
-
-# =========================================================
-# FACT / POINT EXTRACTION
-# =========================================================
-
-def build_source_points(
-    sources: list[dict],
-    max_points: int = DEFAULT_MAX_POINTS,
-) -> list[dict]:
-    """
-    Convert research sources into concise usable points.
-
-    This is deliberately deterministic and does not invent
-    facts that are not present in the supplied research.
-    """
-
-    points = []
-
-    ranked_sources = rank_script_sources(
-        sources
-    )
-
-    for source in ranked_sources:
-
-        title = get_source_title(
-            source
-        )
-
-        description = get_source_description(
-            source
-        )
-
-        url = get_source_url(
-            source
-        )
-
-        video_id = source.get(
-            "video_id",
-            "",
-        )
-
-        text = clean_text(
-            f"{title}. {description}"
-        )
-
-        sentences = extract_sentences(
-            text
-        )
-
-        if not sentences:
-            continue
-
-        # Prefer the title as the primary point.
-        primary_text = title
-
-        if not primary_text:
-            primary_text = sentences[0]
-
-        points.append(
-            {
-                "point_id": len(points) + 1,
-                "text": primary_text,
-                "context": sentences[:3],
-                "source_url": url,
-                "video_id": video_id,
-                "source_title": title,
-                "source_score": get_source_score(
-                    source
-                ),
-            }
-        )
-
-        if len(points) >= max_points:
-            break
-
-    return points
-
-
-# =========================================================
-# HOOK GENERATION
-# =========================================================
-
-def generate_hooks(
-    topic: str,
-    points: list[dict],
-    count: int = DEFAULT_HOOK_COUNT,
-) -> list[str]:
-    """
-    Generate short, high-retention hook candidates.
-
-    Hooks are templates rather than fabricated factual claims.
-    """
-
-    topic = clean_text(
-        topic
-    )
-
-    first_point = ""
-
-    if points:
-
-        first_point = clean_text(
-            points[0].get(
-                "text",
-                "",
-            )
-        )
-
-    hooks = [
-        f"This is one of the craziest things to happen with {topic}.",
-        f"You won't expect what happened in {topic}.",
-        f"Something went seriously wrong in {topic}.",
-        f"This {topic} moment got completely out of control.",
-        f"Wait until you see what happened next.",
-    ]
-
-    if first_point:
-
-        hooks.append(
-            f"At first, it looked normal — then {first_point.lower()}"
-        )
-
-    # Remove duplicates while preserving order.
-    unique = []
-    seen = set()
-
-    for hook in hooks:
-
-        hook = clean_text(
-            hook
-        )
-
-        key = hook.lower()
 
         if key in seen:
             continue
 
         seen.add(key)
-        unique.append(hook)
+        result.append(clip)
 
-    return unique[
-        :count
+    return result
+
+
+def _sort_chronological(
+    clips: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+
+    return sorted(
+        clips,
+        key=lambda clip: _clip_start(clip),
+    )
+
+
+def _estimate_word_count(text: str) -> int:
+    return len(
+        re.findall(
+            r"\b[\w']+\b",
+            text,
+        )
+    )
+
+
+def _build_context_summary(
+    clips: Sequence[Dict[str, Any]],
+) -> str:
+
+    texts = [
+        _clip_text(clip)
+        for clip in clips
+        if _clip_text(clip)
+    ]
+
+    if not texts:
+        return ""
+
+    return " ".join(texts)[:1000]
+
+
+def _choose_story_clips(
+    clips: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+
+    if not clips:
+        return []
+
+    clips = _dedupe_clips(clips)
+
+    hook = _find_best_hook(clips)
+
+    setup = _find_best(
+        clips,
+        ["SETUP"],
+    )
+
+    escalation = _find_best(
+        clips,
+        ["ESCALATION"],
+    )
+
+    reaction = _find_best(
+        clips,
+        ["REACTION"],
+    )
+
+    payoff = _find_best(
+        clips,
+        ["PAYOFF"],
+    )
+
+    ending = _find_best(
+        clips,
+        ["ENDING"],
+    )
+
+    chosen: List[Dict[str, Any]] = []
+
+    for clip in (
+        hook,
+        setup,
+        escalation,
+        reaction,
+        payoff,
+        ending,
+    ):
+        if clip is None:
+            continue
+
+        if clip not in chosen:
+            chosen.append(clip)
+
+    # If story-role classification did not give enough structure, fill from
+    # strongest remaining candidates.
+    remaining = sorted(
+        clips,
+        key=lambda clip: _clip_score(clip),
+        reverse=True,
+    )
+
+    for clip in remaining:
+        if clip in chosen:
+            continue
+
+        chosen.append(clip)
+
+        if len(chosen) >= 8:
+            break
+
+    return _sort_chronological(chosen)
+
+
+def _assign_roles(
+    clips: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+
+    if not clips:
+        return []
+
+    ordered = _sort_chronological(clips)
+
+    roles = [
+        "HOOK",
+        "SETUP",
+        "ESCALATION",
+        "REACTION",
+        "PAYOFF",
+        "ENDING",
+    ]
+
+    output = []
+
+    for index, clip in enumerate(ordered):
+
+        role = _clip_role(clip)
+
+        if role not in roles:
+            if index == 0:
+                role = "HOOK"
+            elif index == len(ordered) - 1:
+                role = "PAYOFF"
+            else:
+                role = "ESCALATION"
+
+        item = dict(clip)
+        item["story_role"] = role
+        item["sequence"] = index + 1
+
+        output.append(item)
+
+    return output
+
+
+def _duration_budget(
+    target_duration: float,
+    story_length: int,
+) -> List[float]:
+
+    target_duration = max(
+        5.0,
+        min(
+            180.0,
+            _safe_float(
+                target_duration,
+                DEFAULT_TARGET_DURATION,
+            ),
+        ),
+    )
+
+    if story_length <= 1:
+        return [target_duration]
+
+    if story_length == 2:
+        ratios = [
+            0.42,
+            0.58,
+        ]
+
+    elif story_length == 3:
+        ratios = [
+            0.25,
+            0.30,
+            0.45,
+        ]
+
+    elif story_length == 4:
+        ratios = [
+            0.20,
+            0.22,
+            0.23,
+            0.35,
+        ]
+
+    elif story_length == 5:
+        ratios = [
+            0.15,
+            0.18,
+            0.20,
+            0.20,
+            0.27,
+        ]
+
+    else:
+        ratios = [
+            0.12,
+            0.14,
+            0.16,
+            0.16,
+            0.20,
+            0.22,
+        ]
+
+        ratios = ratios[:story_length]
+
+        total = sum(ratios)
+
+        if total > 0:
+            ratios = [
+                value / total
+                for value in ratios
+            ]
+
+    return [
+        round(
+            target_duration * ratio,
+            2,
+        )
+        for ratio in ratios
     ]
 
 
-# =========================================================
-# SCRIPT STRUCTURE
-# =========================================================
+def _build_edit_instruction(
+    role: str,
+    clip: Dict[str, Any],
+) -> str:
 
-def build_script_sections(
-    topic: str,
-    points: list[dict],
-) -> list[dict]:
-    """
-    Build a structured short-form script.
+    text = _clip_text(clip)
 
-    The output is designed to work even when narration is
-    disabled: each section contains visual/editing guidance.
-    """
+    if role == "HOOK":
+        return (
+            "Open immediately on the strongest visual/audio moment. "
+            "No intro. No logo. No dead air. "
+            "Use the most surprising frame first, then let the context catch up."
+        )
 
-    sections = []
+    if role == "SETUP":
+        return (
+            "Give only the minimum context needed to understand what is happening. "
+            "Keep the source audio/dialogue whenever it carries useful information."
+        )
 
-    sections.append(
-        {
-            "section": "hook",
-            "order": 1,
-            "duration_target": "0-5s",
-            "narration": (
-                f"You won't believe what happened "
-                f"with {topic}."
-            ),
-            "on_screen_text": (
-                f"{topic.upper()} GOT WILD"
-            ),
-            "visual_instruction": (
-                "Start immediately with the strongest "
-                "available visual moment."
-            ),
-        }
+    if role == "ESCALATION":
+        return (
+            "Increase momentum. Remove pauses and repetitive beats while "
+            "preserving the cause-and-effect sequence."
+        )
+
+    if role == "REACTION":
+        return (
+            "Prioritize the strongest visible or audible reaction. "
+            "A reaction can be used as a quick punch-in or contextual cut."
+        )
+
+    if role == "PAYOFF":
+        return (
+            "Protect the full payoff. Do not cut away before the viewer sees "
+            "the actual outcome."
+        )
+
+    if role == "ENDING":
+        return (
+            "End immediately after the strongest final beat. "
+            "Avoid generic outro language or unnecessary branding."
+        )
+
+    return (
+        "Keep only the useful action and remove dead space."
     )
 
-    for index, point in enumerate(
-        points,
-        start=1,
-    ):
 
-        point_text = clean_text(
-            point.get(
-                "text",
-                "",
-            )
-        )
+def _build_caption_instruction(
+    caption_style: str,
+    caption_settings: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
 
-        source_title = clean_text(
-            point.get(
-                "source_title",
-                "",
-            )
-        )
-
-        sections.append(
-            {
-                "section": "main",
-                "order": index + 1,
-                "point_number": index,
-                "duration_target": "5-12s",
-                "narration": point_text,
-                "on_screen_text": point_text,
-                "visual_instruction": (
-                    "Use the strongest matching footage "
-                    "from the source."
-                ),
-                "source_title": source_title,
-                "source_url": point.get(
-                    "source_url",
-                    "",
-                ),
-                "video_id": point.get(
-                    "video_id",
-                    "",
-                ),
-            }
-        )
-
-    sections.append(
-        {
-            "section": "ending",
-            "order": len(sections) + 1,
-            "duration_target": "2-4s",
-            "narration": (
-                "Which moment was the craziest?"
-            ),
-            "on_screen_text": (
-                "WHICH ONE WAS CRAZIEST?"
-            ),
-            "visual_instruction": (
-                "End on the strongest reaction or "
-                "final payoff frame."
-            ),
-        }
+    settings = dict(
+        caption_settings or {}
     )
 
-    return sections
+    style = (
+        _clean_text(
+            caption_style
+            or settings.get("style")
+            or "Bold Viral"
+        )
+        or "Bold Viral"
+    )
 
+    return {
+        "style": style,
+        "enabled": settings.get(
+            "enabled",
+            True,
+        ),
+        "font": settings.get(
+            "font",
+            "Arial Bold",
+        ),
+        "font_size": settings.get(
+            "font_size",
+            54,
+        ),
+        "position": settings.get(
+            "position",
+            "center",
+        ),
+        "text_color": settings.get(
+            "text_color",
+            "#FFFFFF",
+        ),
+        "highlight_color": settings.get(
+            "highlight_color",
+            "#FFFF00",
+        ),
+        "stroke": settings.get(
+            "stroke",
+            True,
+        ),
+        "shadow": settings.get(
+            "shadow",
+            True,
+        ),
+        "box": settings.get(
+            "box",
+            False,
+        ),
+        "words_per_line": settings.get(
+            "words_per_line",
+            4,
+        ),
+        "max_lines": settings.get(
+            "max_lines",
+            2,
+        ),
+        "keyword_emphasis": settings.get(
+            "keyword_emphasis",
+            True,
+        ),
+    }
 
-# =========================================================
-# FULL SCRIPT GENERATOR
-# =========================================================
 
 def generate_script(
-    topic: str,
-    research: Optional[dict] = None,
-    reference_url: Optional[str] = None,
-    max_points: int = DEFAULT_MAX_POINTS,
-) -> dict:
-    """
-    Generate a complete structured video script from research.
+    clips: Sequence[Dict[str, Any]],
+    target_duration: float = DEFAULT_TARGET_DURATION,
+    topic: str = "",
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[Dict[str, Any]] = None,
+    editing_settings: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
 
-    Input:
-        topic
-        research result from research.py/source_analyzer.py
+    clips = list(clips or [])
 
-    Output:
-        hooks
-        selected sources
-        content points
-        script sections
-        keywords
-    """
+    selected = _choose_story_clips(clips)
 
-    topic = clean_text(
-        topic
+    if not selected and clips:
+        selected = [
+            max(
+                clips,
+                key=lambda clip: _clip_score(clip),
+            )
+        ]
+
+    selected = _assign_roles(selected)
+
+    budgets = _duration_budget(
+        target_duration,
+        len(selected),
     )
 
-    if not topic:
+    timeline: List[Dict[str, Any]] = []
 
-        raise ValueError(
-            "Script topic cannot be empty."
-        )
+    for index, clip in enumerate(selected):
 
-    research = research or {}
+        role = _clip_role(clip)
 
-    sources = research.get(
-        "sources",
-        [],
+        item = {
+            "sequence": index + 1,
+            "role": role,
+            "source_start": round(
+                _clip_start(clip),
+                3,
+            ),
+            "source_end": round(
+                _clip_end(clip),
+                3,
+            ),
+            "source_duration": round(
+                _clip_duration(clip),
+                3,
+            ),
+            "target_screen_duration": budgets[index]
+            if index < len(budgets)
+            else _clip_duration(clip),
+            "score": round(
+                _clip_score(clip),
+                4,
+            ),
+            "hook_score": round(
+                _hook_score(clip),
+                4,
+            ),
+            "text": _clip_text(clip),
+            "edit_instruction": _build_edit_instruction(
+                role,
+                clip,
+            ),
+        }
+
+        timeline.append(item)
+
+    editing = dict(
+        editing_settings or {}
     )
 
-    if not isinstance(
-        sources,
-        list,
-    ):
-
-        sources = []
-
-    selected_sources = rank_script_sources(
-        sources=sources,
-    )
-
-    points = build_source_points(
-        sources=selected_sources,
-        max_points=max_points,
-    )
-
-    hooks = generate_hooks(
-        topic=topic,
-        points=points,
-    )
-
-    sections = build_script_sections(
-        topic=topic,
-        points=points,
-    )
-
-    return {
-        "version": "1.0",
-        "topic": topic,
-        "reference_url": reference_url,
-        "keywords": extract_keywords(
-            topic
+    output = {
+        "topic": _clean_text(topic),
+        "target_duration": round(
+            max(
+                5.0,
+                min(
+                    180.0,
+                    _safe_float(
+                        target_duration,
+                        DEFAULT_TARGET_DURATION,
+                    ),
+                ),
+            ),
+            2,
         ),
-        "source_count": len(
-            selected_sources
+        "format": "9:16",
+        "narration": False,
+        "story_structure": [
+            item["role"]
+            for item in timeline
+        ],
+        "timeline": timeline,
+        "caption": _build_caption_instruction(
+            caption_style,
+            caption_settings,
         ),
-        "selected_sources": selected_sources,
-        "point_count": len(
-            points
+        "editing": {
+            "remove_silence": editing.get(
+                "remove_silence",
+                True,
+            ),
+            "dynamic_zoom": editing.get(
+                "dynamic_zoom",
+                True,
+            ),
+            "punch_in": editing.get(
+                "punch_in",
+                True,
+            ),
+            "audio_normalize": editing.get(
+                "audio_normalize",
+                True,
+            ),
+            "visual_change_target": editing.get(
+                "visual_change_target",
+                "2-4 sec average",
+            ),
+            "avoid_rigid_cuts": True,
+        },
+        "context_summary": _build_context_summary(
+            selected
         ),
-        "points": points,
-        "hooks": hooks,
-        "recommended_hook": (
-            hooks[0]
-            if hooks
-            else ""
+        "estimated_words": _estimate_word_count(
+            _build_context_summary(selected)
         ),
-        "sections": sections,
     }
 
+    return output
 
-# =========================================================
-# NARRATION-FREE EDITING PLAN
-# =========================================================
 
-def build_visual_editing_plan(
-    script: dict,
-) -> list[dict]:
-    """
-    Convert the script into a narration-independent
-    visual editing plan.
+def build_script(
+    clip_analysis: Dict[str, Any],
+    target_duration: float = DEFAULT_TARGET_DURATION,
+    topic: str = "",
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[Dict[str, Any]] = None,
+    editing_settings: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
 
-    This is important for the raw-footage workflow.
-    """
+    clips = []
 
-    sections = script.get(
-        "sections",
-        [],
-    )
+    if isinstance(clip_analysis, dict):
 
-    plan = []
+        if isinstance(
+            clip_analysis.get("clips"),
+            list,
+        ):
+            clips = clip_analysis["clips"]
 
-    for section in sections:
-
-        section_type = section.get(
-            "section",
-            "main",
-        )
-
-        if section_type == "hook":
-
-            instruction = (
-                "Open with the strongest visual. "
-                "No intro animation. No delay."
+        elif isinstance(
+            clip_analysis.get("analysis"),
+            dict,
+        ):
+            clips = clip_analysis["analysis"].get(
+                "clips",
+                [],
             )
 
-        elif section_type == "ending":
-
-            instruction = (
-                "Use the payoff/reaction and finish "
-                "quickly before viewer drop-off."
-            )
-
-        else:
-
-            instruction = (
-                "Cut directly to the relevant action. "
-                "Remove dead time and weak frames."
-            )
-
-        plan.append(
-            {
-                "order": section.get(
-                    "order",
-                    len(plan) + 1,
-                ),
-                "section": section_type,
-                "visual_instruction": instruction,
-                "on_screen_text": section.get(
-                    "on_screen_text",
-                    "",
-                ),
-                "source_url": section.get(
-                    "source_url",
-                    "",
-                ),
-                "video_id": section.get(
-                    "video_id",
-                    "",
-                ),
-            }
-        )
-
-    return plan
-
-
-# =========================================================
-# VALIDATION
-# =========================================================
-
-def validate_script(
-    script: dict,
-) -> dict:
-    """
-    Validate generated script structure.
-    """
-
-    required_keys = [
-        "topic",
-        "hooks",
-        "points",
-        "sections",
-    ]
-
-    missing = [
-        key
-        for key in required_keys
-        if key not in script
-    ]
-
-    errors = []
-
-    if missing:
-
-        errors.append(
-            "Missing keys: "
-            + ", ".join(missing)
-        )
-
-    topic = clean_text(
-        script.get(
-            "topic",
-            "",
-        )
+    return generate_script(
+        clips=clips,
+        target_duration=target_duration,
+        topic=topic,
+        caption_style=caption_style,
+        caption_settings=caption_settings,
+        editing_settings=editing_settings,
     )
 
-    if not topic:
 
-        errors.append(
-            "Script topic is empty."
-        )
+def generate_story(
+    clip_analysis: Dict[str, Any],
+    target_duration: float = DEFAULT_TARGET_DURATION,
+    topic: str = "",
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[Dict[str, Any]] = None,
+    editing_settings: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
 
-    hooks = script.get(
-        "hooks",
-        [],
+    return build_script(
+        clip_analysis=clip_analysis,
+        target_duration=target_duration,
+        topic=topic,
+        caption_style=caption_style,
+        caption_settings=caption_settings,
+        editing_settings=editing_settings,
     )
 
-    if not hooks:
-
-        errors.append(
-            "No hooks were generated."
-        )
-
-    sections = script.get(
-        "sections",
-        [],
-    )
-
-    if not sections:
-
-        errors.append(
-            "No script sections were generated."
-        )
-
-    return {
-        "valid": not errors,
-        "errors": errors,
-    }
-
-
-# =========================================================
-# SAVE
-# =========================================================
 
 def save_script(
-    script: dict,
-    output_path: str | Path,
+    script: Dict[str, Any],
+    output_path: str,
 ) -> str:
-    """
-    Save generated script as JSON.
-    """
 
-    output = Path(
+    directory = os.path.dirname(
         output_path
     )
 
-    output.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    if directory:
+        os.makedirs(
+            directory,
+            exist_ok=True,
+        )
 
-    with output.open(
+    with open(
+        output_path,
         "w",
         encoding="utf-8",
-    ) as file:
-
+    ) as handle:
         json.dump(
             script,
-            file,
+            handle,
             indent=2,
             ensure_ascii=False,
         )
 
-    return str(output)
+    return output_path
 
 
-# =========================================================
-# HUMAN-READABLE SCRIPT
-# =========================================================
+def build_script_report(
+    clip_analysis: Dict[str, Any],
+    target_duration: float = DEFAULT_TARGET_DURATION,
+    topic: str = "",
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[Dict[str, Any]] = None,
+    editing_settings: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
 
-def render_script_text(
-    script: dict,
-) -> str:
-    """
-    Render the structured script into readable text.
-    """
-
-    topic = script.get(
-        "topic",
-        "",
+    script = build_script(
+        clip_analysis=clip_analysis,
+        target_duration=target_duration,
+        topic=topic,
+        caption_style=caption_style,
+        caption_settings=caption_settings,
+        editing_settings=editing_settings,
     )
 
-    lines = [
-        f"TOPIC: {topic}",
-        "",
-        "HOOK:",
-        script.get(
-            "recommended_hook",
-            "",
+    return {
+        "script": script,
+        "timeline": script.get(
+            "timeline",
+            [],
         ),
-        "",
-        "SCRIPT:",
-    ]
-
-    for section in script.get(
-        "sections",
-        [],
-    ):
-
-        section_name = str(
-            section.get(
-                "section",
-                "main",
-            )
-        ).upper()
-
-        lines.append(
-            f"\n[{section_name}]"
-        )
-
-        narration = clean_text(
-            section.get(
-                "narration",
-                "",
-            )
-        )
-
-        text = clean_text(
-            section.get(
-                "on_screen_text",
-                "",
-            )
-        )
-
-        visual = clean_text(
-            section.get(
-                "visual_instruction",
-                "",
-            )
-        )
-
-        if narration:
-
-            lines.append(
-                f"Narration: {narration}"
-            )
-
-        if text:
-
-            lines.append(
-                f"Text: {text}"
-            )
-
-        if visual:
-
-            lines.append(
-                f"Visual: {visual}"
-            )
-
-    return "\n".join(
-        lines
-    )
+        "story_structure": script.get(
+            "story_structure",
+            [],
+        ),
+        "target_duration": script.get(
+            "target_duration",
+            target_duration,
+        ),
+        "narration": False,
+    }
