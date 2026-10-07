@@ -5,58 +5,34 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-
 from core.research import research_topic
 from core.source_analyzer import build_analysis_report
 from core.transcription import (
     transcribe_media,
     transcript_to_clip_segments,
 )
-from core.clip_analyzer import (
-    build_clip_analysis_report,
-)
-from core.video_processor import (
-    process_video,
-)
+from core.clip_analyzer import build_clip_analysis_report
+from core.video_processor import process_video
 from core.script_generator import (
     generate_script,
     build_visual_editing_plan,
 )
 
 
-# =========================================================
-# CONFIG
-# =========================================================
+PIPELINE_VERSION = "2.0"
 
-PIPELINE_VERSION = "1.0"
+DEFAULT_OUTPUT_DIR = Path("output/jobs")
 
-DEFAULT_OUTPUT_DIR = Path(
-    "output/pipeline"
-)
-
-
-# =========================================================
-# HELPERS
-# =========================================================
 
 def create_pipeline_id() -> str:
-    """
-    Create a unique pipeline execution ID.
-    """
-
     return uuid.uuid4().hex
 
 
 def create_output_directory(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
 ) -> Path:
-    """
-    Create the pipeline output directory.
-    """
 
-    directory = Path(
-        output_dir
-    )
+    directory = Path(output_dir)
 
     directory.mkdir(
         parents=True,
@@ -70,36 +46,28 @@ def save_json(
     data: dict,
     output_path: str | Path,
 ) -> str:
-    """
-    Save any pipeline result as JSON.
-    """
 
-    output = Path(
-        output_path
-    )
+    output = Path(output_path)
 
     output.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    with output.open(
-        "w",
-        encoding="utf-8",
-    ) as file:
-
-        json.dump(
+    output.write_text(
+        json.dumps(
             data,
-            file,
             indent=2,
             ensure_ascii=False,
-        )
+        ),
+        encoding="utf-8",
+    )
 
     return str(output)
 
 
 # =========================================================
-# STEP 1 — RESEARCH
+# RESEARCH
 # =========================================================
 
 def run_research(
@@ -107,9 +75,6 @@ def run_research(
     reference_url: Optional[str] = None,
     limit: int = 10,
 ) -> dict:
-    """
-    Research a topic and collect candidate sources.
-    """
 
     return research_topic(
         topic=topic,
@@ -119,7 +84,7 @@ def run_research(
 
 
 # =========================================================
-# STEP 2 — SOURCE ANALYSIS
+# SOURCE ANALYSIS
 # =========================================================
 
 def run_source_analysis(
@@ -127,9 +92,6 @@ def run_source_analysis(
     research: dict,
     reference_url: Optional[str] = None,
 ) -> dict:
-    """
-    Analyze and rank discovered sources.
-    """
 
     sources = research.get(
         "sources",
@@ -144,7 +106,7 @@ def run_source_analysis(
 
 
 # =========================================================
-# STEP 3 — SCRIPT GENERATION
+# SCRIPT
 # =========================================================
 
 def run_script_generation(
@@ -152,9 +114,6 @@ def run_script_generation(
     research: dict,
     reference_url: Optional[str] = None,
 ) -> dict:
-    """
-    Generate structured script and visual editing plan.
-    """
 
     script = generate_script(
         topic=topic,
@@ -172,7 +131,7 @@ def run_script_generation(
 
 
 # =========================================================
-# STEP 4 — TRANSCRIPTION
+# TRANSCRIPTION
 # =========================================================
 
 def run_transcription(
@@ -183,9 +142,6 @@ def run_transcription(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     keep_audio: bool = False,
 ) -> dict:
-    """
-    Transcribe a downloaded/source video locally.
-    """
 
     return transcribe_media(
         media_path=video_path,
@@ -198,7 +154,7 @@ def run_transcription(
 
 
 # =========================================================
-# STEP 5 — CLIP ANALYSIS
+# CLIP ANALYSIS
 # =========================================================
 
 def run_clip_analysis(
@@ -207,14 +163,10 @@ def run_clip_analysis(
     duration: Optional[float] = None,
     max_clips: int = 10,
 ) -> dict:
-    """
-    Analyze transcript peaks and produce clip candidates.
-    """
 
     transcript_segments = []
 
     if transcript:
-
         transcript_segments = (
             transcript_to_clip_segments(
                 transcript
@@ -222,19 +174,15 @@ def run_clip_analysis(
         )
 
     return build_clip_analysis_report(
-        video_path=str(
-            video_path
-        ),
-        transcript_segments=(
-            transcript_segments
-        ),
+        video_path=str(video_path),
+        transcript_segments=transcript_segments,
         duration=duration,
         max_clips=max_clips,
     )
 
 
 # =========================================================
-# STEP 6 — VIDEO PROCESSING
+# VIDEO PROCESSING
 # =========================================================
 
 def run_video_processing(
@@ -242,15 +190,18 @@ def run_video_processing(
     clip_analysis: dict,
     output_dir: str | Path,
     make_vertical: bool = True,
+    duration: Optional[int] = None,
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[dict] = None,
+    editing_settings: Optional[dict] = None,
 ) -> dict:
-    """
-    Turn analyzed clip candidates into actual video files.
-    """
 
-    clips = clip_analysis.get(
+    analysis = clip_analysis.get(
         "analysis",
         {},
-    ).get(
+    )
+
+    clips = analysis.get(
         "clips",
         [],
     )
@@ -260,86 +211,15 @@ def run_video_processing(
         clips=clips,
         output_dir=output_dir,
         make_vertical=make_vertical,
+        duration=duration,
+        caption_style=caption_style,
+        caption_settings=caption_settings or {},
+        editing_settings=editing_settings or {},
     )
 
 
 # =========================================================
-# FULL TOPIC PIPELINE
-# =========================================================
-
-def run_topic_pipeline(
-    topic: str,
-    reference_url: Optional[str] = None,
-    research_limit: int = 10,
-    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
-) -> dict:
-    """
-    Run the research → source analysis → script pipeline.
-
-    This stage does not download or process videos yet.
-    """
-
-    pipeline_id = create_pipeline_id()
-
-    output = create_output_directory(
-        output_dir
-    )
-
-    research = run_research(
-        topic=topic,
-        reference_url=reference_url,
-        limit=research_limit,
-    )
-
-    research_path = save_json(
-        research,
-        output
-        / f"{pipeline_id}_research.json",
-    )
-
-    source_analysis = run_source_analysis(
-        topic=topic,
-        research=research,
-        reference_url=reference_url,
-    )
-
-    source_analysis_path = save_json(
-        source_analysis,
-        output
-        / f"{pipeline_id}_source_analysis.json",
-    )
-
-    script = run_script_generation(
-        topic=topic,
-        research=source_analysis,
-        reference_url=reference_url,
-    )
-
-    script_path = save_json(
-        script,
-        output
-        / f"{pipeline_id}_script.json",
-    )
-
-    return {
-        "pipeline_id": pipeline_id,
-        "version": PIPELINE_VERSION,
-        "mode": "topic",
-        "topic": topic,
-        "reference_url": reference_url,
-        "research": research,
-        "source_analysis": source_analysis,
-        "script": script,
-        "artifacts": {
-            "research": research_path,
-            "source_analysis": source_analysis_path,
-            "script": script_path,
-        },
-    }
-
-
-# =========================================================
-# FULL VIDEO PIPELINE
+# COMPLETE VIDEO PIPELINE
 # =========================================================
 
 def run_video_pipeline(
@@ -353,22 +233,12 @@ def run_video_pipeline(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     make_vertical: bool = True,
     keep_audio: bool = False,
+
+    duration: int = 30,
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[dict] = None,
+    editing_settings: Optional[dict] = None,
 ) -> dict:
-    """
-    Run the complete available video-processing pipeline:
-
-        Video
-          ↓
-        Transcription
-          ↓
-        Clip Analysis
-          ↓
-        Video Processing
-          ↓
-        Final Clips
-
-    If a topic is supplied, script generation is also included.
-    """
 
     pipeline_id = create_pipeline_id()
 
@@ -376,18 +246,87 @@ def run_video_pipeline(
         output_dir
     )
 
-    video_path = str(
-        video_path
+    video_path = str(video_path)
+
+    caption_settings = caption_settings or {}
+    editing_settings = editing_settings or {}
+
+    # -----------------------------------------------------
+    # 1. RESEARCH
+    # -----------------------------------------------------
+
+    research = {}
+
+    if topic:
+        try:
+            research = run_research(
+                topic=topic,
+                reference_url=reference_url,
+                limit=10,
+            )
+        except Exception as error:
+            research = {
+                "error": str(error),
+                "sources": [],
+            }
+
+    research_path = save_json(
+        research,
+        output / f"{pipeline_id}_research.json",
     )
 
     # -----------------------------------------------------
-    # TRANSCRIPTION
+    # 2. SOURCE ANALYSIS
     # -----------------------------------------------------
 
-    transcript_dir = (
-        output
-        / "transcription"
+    source_analysis = {}
+
+    if research:
+        try:
+            source_analysis = run_source_analysis(
+                topic=topic or "",
+                research=research,
+                reference_url=reference_url,
+            )
+        except Exception as error:
+            source_analysis = {
+                "error": str(error),
+                "sources": [],
+            }
+
+    source_analysis_path = save_json(
+        source_analysis,
+        output / f"{pipeline_id}_source_analysis.json",
     )
+
+    # -----------------------------------------------------
+    # 3. STORY / SCRIPT
+    # -----------------------------------------------------
+
+    script = {}
+
+    if source_analysis:
+        try:
+            script = run_script_generation(
+                topic=topic or "",
+                research=source_analysis,
+                reference_url=reference_url,
+            )
+        except Exception as error:
+            script = {
+                "error": str(error),
+            }
+
+    script_path = save_json(
+        script,
+        output / f"{pipeline_id}_script.json",
+    )
+
+    # -----------------------------------------------------
+    # 4. TRANSCRIPTION
+    # -----------------------------------------------------
+
+    transcript_dir = output / "transcription"
 
     transcript = run_transcription(
         video_path=video_path,
@@ -400,15 +339,14 @@ def run_video_pipeline(
 
     transcript_path = save_json(
         transcript,
-        output
-        / f"{pipeline_id}_transcript.json",
+        output / f"{pipeline_id}_transcript.json",
     )
 
     # -----------------------------------------------------
-    # VIDEO DURATION
+    # 5. SOURCE DURATION
     # -----------------------------------------------------
 
-    duration = None
+    source_duration = None
 
     segments = transcript.get(
         "segments",
@@ -416,194 +354,129 @@ def run_video_pipeline(
     )
 
     if segments:
-
         try:
-
-            duration = max(
-                float(
-                    segment.get(
-                        "end",
-                        0.0,
-                    )
-                )
+            source_duration = max(
+                float(segment.get("end", 0))
                 for segment in segments
             )
-
-        except (
-            ValueError,
-            TypeError,
-        ):
-
-            duration = None
+        except Exception:
+            source_duration = None
 
     # -----------------------------------------------------
-    # CLIP ANALYSIS
+    # 6. CLIP INTELLIGENCE
     # -----------------------------------------------------
 
     clip_analysis = run_clip_analysis(
         video_path=video_path,
         transcript=transcript,
-        duration=duration,
+        duration=source_duration,
         max_clips=max_clips,
     )
 
     clip_analysis_path = save_json(
         clip_analysis,
-        output
-        / f"{pipeline_id}_clip_analysis.json",
+        output / f"{pipeline_id}_clip_analysis.json",
     )
 
     # -----------------------------------------------------
-    # VIDEO PROCESSING
+    # 7. FINAL VIDEO
     # -----------------------------------------------------
-
-    clips_output_dir = (
-        output
-        / "clips"
-    )
 
     processing = run_video_processing(
         video_path=video_path,
         clip_analysis=clip_analysis,
-        output_dir=clips_output_dir,
+        output_dir=output,
         make_vertical=make_vertical,
+        duration=duration,
+        caption_style=caption_style,
+        caption_settings=caption_settings,
+        editing_settings=editing_settings,
     )
 
-    processing_path = save_json(
-        processing,
-        output
-        / f"{pipeline_id}_processing.json",
+    output_path = (
+        processing.get("output_path")
+        or processing.get("final_video")
+        or processing.get("result_path")
     )
 
-    # -----------------------------------------------------
-    # OPTIONAL SCRIPT
-    # -----------------------------------------------------
-
-    script = None
-    script_path = None
-
-    if topic:
-
-        research = run_research(
-            topic=topic,
-            reference_url=reference_url,
-            limit=10,
-        )
-
-        source_analysis = run_source_analysis(
-            topic=topic,
-            research=research,
-            reference_url=reference_url,
-        )
-
-        script = run_script_generation(
-            topic=topic,
-            research=source_analysis,
-            reference_url=reference_url,
-        )
-
-        script_path = save_json(
-            script,
-            output
-            / f"{pipeline_id}_script.json",
-        )
-
-    # -----------------------------------------------------
-    # FINAL RESULT
-    # -----------------------------------------------------
-
-    return {
+    result = {
+        "success": bool(
+            processing.get(
+                "success",
+                False,
+            )
+        ),
         "pipeline_id": pipeline_id,
         "version": PIPELINE_VERSION,
-        "mode": "video",
-        "video_path": video_path,
+
+        "source_video": video_path,
         "topic": topic,
         "reference_url": reference_url,
-        "transcription": transcript,
+
+        "duration": duration,
+
+        "caption_style": caption_style,
+        "caption_settings": caption_settings,
+        "editing_settings": editing_settings,
+
+        "output_path": output_path,
+
+        "research": research,
+        "source_analysis": source_analysis,
+        "script": script,
+        "transcript": transcript,
         "clip_analysis": clip_analysis,
         "processing": processing,
-        "script": script,
+
         "artifacts": {
+            "research": research_path,
+            "source_analysis": source_analysis_path,
+            "script": script_path,
             "transcript": transcript_path,
             "clip_analysis": clip_analysis_path,
-            "processing": processing_path,
-            "script": script_path,
         },
     }
 
+    result_path = (
+        output
+        / f"{pipeline_id}_result.json"
+    )
 
-# =========================================================
-# PIPELINE STATUS
-# =========================================================
+    save_json(
+        result,
+        result_path,
+    )
+
+    result["result_file"] = str(
+        result_path
+    )
+
+    return result
+
 
 def summarize_pipeline(
     result: dict,
 ) -> dict:
-    """
-    Create a compact status summary for the UI.
-    """
-
-    transcription = result.get(
-        "transcription",
-        {},
-    )
-
-    clip_analysis = result.get(
-        "clip_analysis",
-        {},
-    )
-
-    analysis = clip_analysis.get(
-        "analysis",
-        {},
-    )
-
-    processing = result.get(
-        "processing",
-        {},
-    )
 
     return {
+        "success": result.get(
+            "success",
+            False,
+        ),
         "pipeline_id": result.get(
             "pipeline_id"
         ),
-        "mode": result.get(
-            "mode"
+        "version": result.get(
+            "version"
         ),
-        "status": "completed",
-        "source_video": result.get(
-            "video_path"
+        "output_path": result.get(
+            "output_path"
         ),
-        "transcript_segments": (
-            transcription.get(
-                "segment_count",
-                0,
-            )
-        ),
-        "clip_candidates": (
-            analysis.get(
-                "clip_count",
-                0,
-            )
-        ),
-        "processed_clips": (
-            processing.get(
-                "clip_count",
-                0,
-            )
-        ),
-        "script_generated": (
-            result.get(
-                "script"
-            )
-            is not None
+        "duration": result.get(
+            "duration"
         ),
     }
 
-
-# =========================================================
-# SAFE PIPELINE RUNNER
-# =========================================================
 
 def execute_video_pipeline(
     video_path: str | Path,
@@ -616,67 +489,97 @@ def execute_video_pipeline(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     make_vertical: bool = True,
     keep_audio: bool = False,
+
+    duration: int = 30,
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[dict] = None,
+    editing_settings: Optional[dict] = None,
 ) -> dict:
-    """
-    Execute the video pipeline and return a structured
-    success/failure response.
 
-    This wrapper is intended for Streamlit, GitHub jobs,
-    workers, and future automation.
-    """
+    return run_video_pipeline(
+        video_path=video_path,
+        topic=topic,
+        reference_url=reference_url,
+        whisper_command=whisper_command,
+        model_path=model_path,
+        language=language,
+        max_clips=max_clips,
+        output_dir=output_dir,
+        make_vertical=make_vertical,
+        keep_audio=keep_audio,
 
-    try:
+        duration=duration,
+        caption_style=caption_style,
+        caption_settings=caption_settings,
+        editing_settings=editing_settings,
+    )
 
-        result = run_video_pipeline(
-            video_path=video_path,
-            topic=topic,
-            reference_url=reference_url,
-            whisper_command=whisper_command,
-            model_path=model_path,
-            language=language,
-            max_clips=max_clips,
-            output_dir=output_dir,
-            make_vertical=make_vertical,
-            keep_audio=keep_audio,
-        )
-
-        result["success"] = True
-
-        result["summary"] = (
-            summarize_pipeline(
-                result
-            )
-        )
-
-        return result
-
-    except Exception as exc:
-
-        return {
-            "success": False,
-            "status": "failed",
-            "error": str(exc),
-            "video_path": str(
-                video_path
-            ),
-            "topic": topic,
-            "reference_url": reference_url,
-        }
-
-
-# =========================================================
-# SAVE FINAL PIPELINE RESULT
-# =========================================================
 
 def save_pipeline_result(
     result: dict,
     output_path: str | Path,
 ) -> str:
-    """
-    Save complete pipeline execution result.
-    """
 
     return save_json(
         result,
         output_path,
     )
+
+# ============================================================
+# TOPIC PIPELINE COMPATIBILITY
+# ============================================================
+
+def run_topic_pipeline(
+    topic: str,
+    reference_url: Optional[str] = None,
+    research_limit: int = 10,
+    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+) -> dict:
+    pipeline_id = create_pipeline_id()
+    output = create_output_directory(output_dir)
+
+    research = run_research(
+        topic=topic,
+        reference_url=reference_url,
+        limit=research_limit,
+    )
+    research_path = save_json(
+        research,
+        output / f"{pipeline_id}_research.json",
+    )
+
+    source_analysis = run_source_analysis(
+        topic=topic,
+        research=research,
+        reference_url=reference_url,
+    )
+    source_analysis_path = save_json(
+        source_analysis,
+        output / f"{pipeline_id}_source_analysis.json",
+    )
+
+    script = run_script_generation(
+        topic=topic,
+        research=source_analysis,
+        reference_url=reference_url,
+    )
+    script_path = save_json(
+        script,
+        output / f"{pipeline_id}_script.json",
+    )
+
+    return {
+        "success": True,
+        "pipeline_id": pipeline_id,
+        "version": PIPELINE_VERSION,
+        "topic": topic,
+        "reference_url": reference_url,
+        "research": research,
+        "source_analysis": source_analysis,
+        "script": script,
+        "artifacts": {
+            "research": research_path,
+            "source_analysis": source_analysis_path,
+            "script": script_path,
+        },
+    }
