@@ -26,7 +26,9 @@ st.markdown(
     """
     <style>
 
-    /* ---------- GLOBAL ---------- */
+    /* ======================================================
+       GLOBAL
+       ====================================================== */
 
     .stApp {
         background:
@@ -55,7 +57,9 @@ st.markdown(
         padding-bottom: 4rem;
     }
 
-    /* ---------- SIDEBAR ---------- */
+    /* ======================================================
+       SIDEBAR
+       ====================================================== */
 
     section[data-testid="stSidebar"] {
         background:
@@ -71,18 +75,26 @@ st.markdown(
         padding-top: 1.5rem;
     }
 
-    /* ---------- TEXT ---------- */
+    /* ======================================================
+       TEXT
+       ====================================================== */
 
-    h1, h2, h3 {
+    h1,
+    h2,
+    h3 {
         color: #f8f9ff !important;
         letter-spacing: -0.025em;
     }
 
-    p, label, .stMarkdown {
+    p,
+    label,
+    .stMarkdown {
         color: #c8ccda;
     }
 
-    /* ---------- HERO ---------- */
+    /* ======================================================
+       HERO
+       ====================================================== */
 
     .hero {
         position: relative;
@@ -156,7 +168,9 @@ st.markdown(
         font-weight: 600;
     }
 
-    /* ---------- CARDS ---------- */
+    /* ======================================================
+       CARDS
+       ====================================================== */
 
     .glass-card {
         padding: 22px;
@@ -182,7 +196,9 @@ st.markdown(
         margin-bottom: 18px;
     }
 
-    /* ---------- SECTION LABEL ---------- */
+    /* ======================================================
+       SECTION LABEL
+       ====================================================== */
 
     .section-label {
         display: flex;
@@ -196,7 +212,9 @@ st.markdown(
         color: #8992aa;
     }
 
-    /* ---------- INPUTS ---------- */
+    /* ======================================================
+       INPUTS
+       ====================================================== */
 
     div[data-baseweb="input"] > div,
     div[data-baseweb="select"] > div,
@@ -206,11 +224,14 @@ st.markdown(
         border-radius: 12px !important;
     }
 
-    input, textarea {
+    input,
+    textarea {
         color: #f4f6ff !important;
     }
 
-    /* ---------- BUTTON ---------- */
+    /* ======================================================
+       BUTTON
+       ====================================================== */
 
     .stButton > button {
         border-radius: 12px;
@@ -228,7 +249,9 @@ st.markdown(
         transform: translateY(-1px);
     }
 
-    /* ---------- PRIMARY BUTTON ---------- */
+    /* ======================================================
+       PRIMARY BUTTON
+       ====================================================== */
 
     .primary-wrap button {
         background:
@@ -251,13 +274,17 @@ st.markdown(
         transform: translateY(-2px);
     }
 
-    /* ---------- RADIO ---------- */
+    /* ======================================================
+       RADIO
+       ====================================================== */
 
     div[role="radiogroup"] {
         gap: 7px;
     }
 
-    /* ---------- EXPANDER ---------- */
+    /* ======================================================
+       EXPANDER
+       ====================================================== */
 
     details {
         background: rgba(255,255,255,0.025);
@@ -265,7 +292,9 @@ st.markdown(
         border-radius: 14px;
     }
 
-    /* ---------- STATUS ---------- */
+    /* ======================================================
+       STATUS
+       ====================================================== */
 
     .status-card {
         display: flex;
@@ -302,7 +331,9 @@ st.markdown(
         font-size: 12px;
     }
 
-    /* ---------- FOOTER ---------- */
+    /* ======================================================
+       FOOTER
+       ====================================================== */
 
     .footer {
         text-align: center;
@@ -311,7 +342,9 @@ st.markdown(
         padding-top: 25px;
     }
 
-    /* ---------- MOBILE ---------- */
+    /* ======================================================
+       MOBILE
+       ====================================================== */
 
     @media (max-width: 768px) {
 
@@ -327,6 +360,10 @@ st.markdown(
 
         .hero-title {
             font-size: 30px;
+        }
+
+        .hero-subtitle {
+            font-size: 14px;
         }
 
     }
@@ -426,7 +463,6 @@ with st.sidebar:
     }
 
     if duration_choice == "Custom":
-
         duration = st.slider(
             "Custom Duration",
             5,
@@ -434,9 +470,7 @@ with st.sidebar:
             30,
             1,
         )
-
     else:
-
         duration = duration_map[duration_choice]
 
     st.divider()
@@ -600,7 +634,7 @@ if input_mode == "YouTube URL":
     )
 
     st.caption(
-        "🔗 Reference video mode — V2 analyzes the source before rebuilding the story."
+        "🔗 Reference mode — V2 researches/analyzes the source before rebuilding the story."
     )
 
 else:
@@ -742,23 +776,21 @@ if generate:
                 github_token = ""
 
             if not github_token:
-
                 st.error(
                     "GITHUB_TOKEN is missing from Streamlit Secrets."
                 )
-
                 st.stop()
 
             # ------------------------------------------------
             # INPUT TYPE
             # ------------------------------------------------
 
+            # IMPORTANT:
+            # A YouTube URL must enter the V2 video-processing
+            # pipeline, NOT the old download-only path.
             if input_mode == "YouTube URL":
-
-                job_type = "download"
-
+                job_type = "video"
             else:
-
                 job_type = "topic"
 
             # ------------------------------------------------
@@ -782,7 +814,7 @@ if generate:
             # ------------------------------------------------
 
             with st.spinner(
-                "🚀 Sending job to V2 worker..."
+                "🚀 Sending Pro V2 job to worker..."
             ):
 
                 github_result = create_github_job(
@@ -803,10 +835,12 @@ if generate:
                 <div class="status-card">
                     <div class="status-left">
                         <div class="status-dot"></div>
+
                         <div>
                             <div class="status-text">
-                                Worker Queue
+                                V2 Worker Queue
                             </div>
+
                             <div class="status-small">
                                 Job {job_id}
                             </div>
@@ -827,15 +861,13 @@ if generate:
             )
 
             if github_result:
-
                 st.caption(
                     f"📦 GitHub job created: `{github_result}`"
                 )
 
             st.info(
-                "Worker will automatically detect the queued job "
-                "and continue the existing download → processing → "
-                "phone-save pipeline."
+                "Worker will detect the queued job and run the "
+                "V2 research → analysis → story → rendering pipeline."
             )
 
         except Exception as exc:
@@ -856,14 +888,19 @@ st.markdown(
 
 col1, col2, col3, col4 = st.columns(4)
 
+
 with col1:
 
     st.markdown(
         f"""
         <div class="glass-card">
-            <div style="font-size:12px;color:#777f96;">
+            <div style="
+                font-size:12px;
+                color:#777f96;
+            ">
                 DURATION
             </div>
+
             <div style="
                 font-size:25px;
                 font-weight:800;
@@ -883,12 +920,16 @@ with col2:
     st.markdown(
         f"""
         <div class="glass-card">
-            <div style="font-size:12px;color:#777f96;">
+            <div style="
+                font-size:12px;
+                color:#777f96;
+            ">
                 CAPTION
             </div>
+
             <div style="
                 font-size:18px;
-                font-weight:750;
+                font-weight:800;
                 color:#f4f6ff;
                 margin-top:8px;
             ">
@@ -902,21 +943,23 @@ with col2:
 
 with col3:
 
-    zoom_status = "ON" if dynamic_zoom else "OFF"
-
     st.markdown(
         f"""
         <div class="glass-card">
-            <div style="font-size:12px;color:#777f96;">
-                DYNAMIC ZOOM
-            </div>
             <div style="
-                font-size:25px;
+                font-size:12px;
+                color:#777f96;
+            ">
+                VISUAL RHYTHM
+            </div>
+
+            <div style="
+                font-size:18px;
                 font-weight:800;
                 color:#f4f6ff;
-                margin-top:5px;
+                margin-top:8px;
             ">
-                {zoom_status}
+                {visual_changes}
             </div>
         </div>
         """,
@@ -931,14 +974,18 @@ with col4:
     st.markdown(
         f"""
         <div class="glass-card">
-            <div style="font-size:12px;color:#777f96;">
+            <div style="
+                font-size:12px;
+                color:#777f96;
+            ">
                 RESEARCH
             </div>
+
             <div style="
-                font-size:25px;
+                font-size:18px;
                 font-weight:800;
                 color:#f4f6ff;
-                margin-top:5px;
+                margin-top:8px;
             ">
                 {research_status}
             </div>
@@ -949,60 +996,90 @@ with col4:
 
 
 # ============================================================
-# PIPELINE PREVIEW
+# FEATURE STATUS
 # ============================================================
 
 st.markdown(
-    '<div class="section-label">🧠 V2 PIPELINE</div>',
+    '<div class="section-label">🧠 PRO V2 FEATURES</div>',
     unsafe_allow_html=True,
 )
 
-pipeline_cols = st.columns(6)
+feature_col1, feature_col2, feature_col3 = st.columns(3)
 
-pipeline_steps = [
-    ("01", "Research"),
-    ("02", "Analyze"),
-    ("03", "Transcribe"),
-    ("04", "Story"),
-    ("05", "Edit"),
-    ("06", "Export"),
-]
 
-for col, (number, title) in zip(
-    pipeline_cols,
-    pipeline_steps,
-):
+with feature_col1:
 
-    with col:
+    st.markdown(
+        """
+        <div class="glass-card">
+            <div class="card-title">🔎 Intelligence</div>
 
-        st.markdown(
-            f"""
-            <div style="
-                padding:18px 12px;
-                text-align:center;
-                border-radius:15px;
-                background:rgba(255,255,255,0.025);
-                border:1px solid rgba(255,255,255,0.06);
-            ">
-                <div style="
-                    font-size:11px;
-                    color:#6f7890;
-                    margin-bottom:6px;
-                ">
-                    {number}
-                </div>
-
-                <div style="
-                    font-size:13px;
-                    font-weight:700;
-                    color:#dfe3f1;
-                ">
-                    {title}
-                </div>
+            <div class="card-description">
+                Multi-source research, source analysis,
+                transcript intelligence and context detection.
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+
+            <div class="status-small">
+                ✓ Research<br>
+                ✓ Relevance scoring<br>
+                ✓ Hook detection<br>
+                ✓ Reaction / payoff detection
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+with feature_col2:
+
+    st.markdown(
+        """
+        <div class="glass-card">
+            <div class="card-title">🧠 Story Engine</div>
+
+            <div class="card-description">
+                The selected footage is organized around
+                retention-focused story roles.
+            </div>
+
+            <div class="status-small">
+                ✓ Hook<br>
+                ✓ Setup<br>
+                ✓ Escalation<br>
+                ✓ Reaction<br>
+                ✓ Payoff<br>
+                ✓ Ending
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+with feature_col3:
+
+    st.markdown(
+        """
+        <div class="glass-card">
+            <div class="card-title">🎬 Video Engine</div>
+
+            <div class="card-description">
+                Final rendering controls for vertical
+                short-form output.
+            </div>
+
+            <div class="status-small">
+                ✓ 9:16 output<br>
+                ✓ Dynamic zoom<br>
+                ✓ Captions<br>
+                ✓ Audio normalization<br>
+                ✓ Dead-space handling
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ============================================================
@@ -1012,9 +1089,9 @@ for col, (number, title) in zip(
 st.markdown(
     """
     <div class="footer">
-        Auto Faceless Video Creator • Pro V2
+        Auto Faceless Studio · Pro V2
         <br>
-        GitHub Queue • Termux Worker • Automated Video Pipeline
+        Research → Story → Edit → Render
     </div>
     """,
     unsafe_allow_html=True,
