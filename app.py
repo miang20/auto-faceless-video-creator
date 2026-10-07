@@ -2,6 +2,7 @@ import urllib.request
 import json
 
 import streamlit as st
+import uuid
 
 from core.config import (
     GITHUB_OWNER,
@@ -259,6 +260,7 @@ if st.button(
         token = get_github_token()
 
         job = create_job(
+            job_id=str(uuid.uuid4()),
             job_type="video",
             input_value=video_url,
             reference_url=reference,
