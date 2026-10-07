@@ -273,9 +273,10 @@ if st.button(
         with st.spinner(
             "Adding V2 job to GitHub queue..."
         ):
+            job_data = job.to_dict() if hasattr(job, "to_dict") else job
             job_path = create_github_job(
                 token=token,
-                job=job,
+                job=job_data,
             )
 
         st.success(
