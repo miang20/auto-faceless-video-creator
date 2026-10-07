@@ -1,73 +1,65 @@
 from __future__ import annotations
 
-import uuid
-from pathlib import Path
 from typing import Optional
 
 from core.config import (
     DEFAULT_LANGUAGE,
     DEFAULT_MAX_CLIPS,
-    DEFAULT_MAKE_VERTICAL,
-    DEFAULT_KEEP_AUDIO,
-    DEFAULT_RESEARCH_LIMIT,
-    JOB_OUTPUT_DIR,
 )
-
-from core.validator import (
-    validate_job_input,
-    validate_topic_request,
-    validate_video_request,
-)
-
+from core.validator import validate_input
 from core.jobs import create_job
 from core.job_store import save_job, load_job
-
 from core.pipeline import (
     run_topic_pipeline,
     execute_video_pipeline,
 )
 
-from core.job_runner import (
-    run_video_job,
-)
-
-
-# ============================================================
-# ID
-# ============================================================
-
-def create_job_id() -> str:
-    """
-    Generate a unique job ID.
-    """
-
-    return uuid.uuid4().hex
-
-
-# ============================================================
-# JOB CREATION
-# ============================================================
 
 def create_orchestrator_job(
     job_type: str,
     input_value: str,
     reference_url: Optional[str] = None,
+    duration: int = 30,
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[dict] = None,
+    editing_settings: Optional[dict] = None,
 ) -> dict:
     """
-    Validate and create a new queued job.
+    Create and persist a queued Pro V2 job.
+
+    New Pro V2 settings are stored directly inside the job so
+    the existing GitHub queue can carry them without requiring
+    a separate configuration system.
     """
 
-    validated = validate_job_input(
+    validation = validate_input(
         job_type=job_type,
         input_value=input_value,
         reference_url=reference_url,
     )
 
+    if isinstance(validation, dict):
+        if not validation.get("valid", True):
+            raise ValueError(
+                validation.get(
+                    "error",
+                    "Invalid job input.",
+                )
+            )
+    elif validation is False:
+        raise ValueError("Invalid job input.")
+
+    job_id = create_job_id()
+
     job = create_job(
-        job_id=create_job_id(),
-        job_type=validated["job_type"],
-        input_value=validated["input_value"],
-        reference_url=validated["reference_url"],
+        job_id=job_id,
+        job_type=job_type,
+        input_value=input_value,
+        reference_url=reference_url,
+        duration=duration,
+        caption_style=caption_style,
+        caption_settings=caption_settings,
+        editing_settings=editing_settings,
     )
 
     save_job(job)
@@ -75,75 +67,96 @@ def create_orchestrator_job(
     return job.to_dict()
 
 
-# ============================================================
-# TOPIC WORKFLOW
-# ============================================================
+def create_job_id() -> str:
+    """
+    Generate a unique job ID.
+    """
+
+    import uuid
+
+    return uuid.uuid4().hex
+
 
 def execute_topic_job(
     topic: str,
     reference_url: Optional[str] = None,
-    research_limit: int = DEFAULT_RESEARCH_LIMIT,
-    output_dir: str | Path = JOB_OUTPUT_DIR,
+    duration: int = 30,
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[dict] = None,
+    editing_settings: Optional[dict] = None,
 ) -> dict:
     """
-    Execute a complete topic-based workflow.
-
-    Flow:
-
-        Topic
-          ↓
-        Validation
-          ↓
-        Research
-          ↓
-        Source Analysis
-          ↓
-        Script
-          ↓
-        Saved Artifacts
+    Execute a topic-based Pro V2 research workflow.
     """
 
-    validated = validate_topic_request(
-        topic=topic,
+    validation = validate_input(
+        job_type="topic",
+        input_value=topic,
         reference_url=reference_url,
-        research_limit=research_limit,
     )
+
+    if isinstance(validation, dict):
+        if not validation.get("valid", True):
+            return {
+                "success": False,
+                "status": "failed",
+                "error": validation.get(
+                    "error",
+                    "Invalid topic input.",
+                ),
+            }
+    elif validation is False:
+        return {
+            "success": False,
+            "status": "failed",
+            "error": "Invalid topic input.",
+        }
 
     job_id = create_job_id()
 
     job = create_job(
         job_id=job_id,
         job_type="topic",
-        input_value=validated["topic"],
-        reference_url=validated["reference_url"],
+        input_value=topic,
+        reference_url=reference_url,
+        duration=duration,
+        caption_style=caption_style,
+        caption_settings=caption_settings,
+        editing_settings=editing_settings,
     )
 
     save_job(job)
 
     try:
         result = run_topic_pipeline(
-            topic=validated["topic"],
-            reference_url=validated["reference_url"],
-            research_limit=validated["research_limit"],
-            output_dir=output_dir,
+            topic=topic,
+            reference_url=reference_url,
+            duration=duration,
+            caption_style=caption_style,
+            caption_settings=caption_settings,
+            editing_settings=editing_settings,
         )
 
-        update_job(
-            job_id=job_id,
-            status="completed",
-            result_path=result.get(
-                "artifacts",
-                {},
-            ).get("script"),
-        )
+        if result.get("success"):
+            update_job(
+                job_id=job_id,
+                status="completed",
+                result_path=result.get("script_path"),
+            )
+        else:
+            update_job(
+                job_id=job_id,
+                status="failed",
+                error=result.get(
+                    "error",
+                    "Topic pipeline failed.",
+                ),
+            )
 
         result["job_id"] = job_id
-        result["success"] = True
-
         return result
 
     except Exception as exc:
-
         update_job(
             job_id=job_id,
             status="failed",
@@ -158,118 +171,103 @@ def execute_topic_job(
         }
 
 
-# ============================================================
-# VIDEO WORKFLOW
-# ============================================================
-
 def execute_video_job(
-    video_path: str | Path,
-    topic: Optional[str] = None,
+    video_path: str,
     reference_url: Optional[str] = None,
-    whisper_command: Optional[str] = None,
-    model_path: Optional[str] = None,
     language: str = DEFAULT_LANGUAGE,
     max_clips: int = DEFAULT_MAX_CLIPS,
-    output_dir: str | Path = JOB_OUTPUT_DIR,
-    make_vertical: bool = DEFAULT_MAKE_VERTICAL,
-    keep_audio: bool = DEFAULT_KEEP_AUDIO,
+    output_dir: str = "output/jobs",
+    make_vertical: bool = True,
+    keep_audio: bool = False,
+    whisper_command: Optional[str] = None,
+    model_path: Optional[str] = None,
+    duration: int = 30,
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[dict] = None,
+    editing_settings: Optional[dict] = None,
 ) -> dict:
     """
-    Execute a complete local video workflow.
-
-    Flow:
-
-        Video
-          ↓
-        Validation
-          ↓
-        Transcription
-          ↓
-        Clip Analysis
-          ↓
-        Clip Processing
-          ↓
-        Optional Research
-          ↓
-        Optional Script
+    Execute a video job directly through the Pro V2 pipeline.
     """
 
-    validated = validate_video_request(
-        video_path=video_path,
-        topic=topic,
+    validation = validate_input(
+        job_type="video",
+        input_value=video_path,
         reference_url=reference_url,
-        language=language,
-        max_clips=max_clips,
-        make_vertical=make_vertical,
-        keep_audio=keep_audio,
     )
+
+    if isinstance(validation, dict):
+        if not validation.get("valid", True):
+            return {
+                "success": False,
+                "status": "failed",
+                "error": validation.get(
+                    "error",
+                    "Invalid video input.",
+                ),
+            }
+    elif validation is False:
+        return {
+            "success": False,
+            "status": "failed",
+            "error": "Invalid video input.",
+        }
 
     job_id = create_job_id()
-
-    job_input = (
-        validated["topic"]
-        if validated["topic"]
-        else validated["video_path"]
-    )
 
     job = create_job(
         job_id=job_id,
         job_type="video",
-        input_value=job_input,
-        reference_url=validated["reference_url"],
+        input_value=video_path,
+        reference_url=reference_url,
+        duration=duration,
+        caption_style=caption_style,
+        caption_settings=caption_settings,
+        editing_settings=editing_settings,
     )
 
     save_job(job)
 
     try:
-
         result = execute_video_pipeline(
-            video_path=validated["video_path"],
-            topic=validated["topic"],
-            reference_url=validated["reference_url"],
+            video_path=video_path,
+            topic=video_path,
+            reference_url=reference_url,
             whisper_command=whisper_command,
             model_path=model_path,
-            language=validated["language"],
-            max_clips=validated["max_clips"],
+            language=language,
+            max_clips=max_clips,
             output_dir=output_dir,
-            make_vertical=validated["make_vertical"],
-            keep_audio=validated["keep_audio"],
+            make_vertical=make_vertical,
+            keep_audio=keep_audio,
+            duration=duration,
+            caption_style=caption_style,
+            caption_settings=caption_settings,
+            editing_settings=editing_settings,
         )
 
-        if not result.get("success"):
-
-            error = result.get(
-                "error",
-                "Video pipeline failed.",
-            )
+        if result.get("success"):
+            result_path = result.get("processing_report_path")
 
             update_job(
                 job_id=job_id,
+                status="completed",
+                result_path=result_path,
+            )
+        else:
+            update_job(
+                job_id=job_id,
                 status="failed",
-                error=error,
+                error=result.get(
+                    "error",
+                    "Video pipeline failed.",
+                ),
             )
 
-            result["job_id"] = job_id
-
-            return result
-
-        result_path = result.get(
-            "artifacts",
-            {},
-        ).get("processing")
-
-        update_job(
-            job_id=job_id,
-            status="completed",
-            result_path=result_path,
-        )
-
         result["job_id"] = job_id
-
         return result
 
     except Exception as exc:
-
         update_job(
             job_id=job_id,
             status="failed",
@@ -283,10 +281,6 @@ def execute_video_job(
             "error": str(exc),
         }
 
-
-# ============================================================
-# DOWNLOADED / QUEUED VIDEO JOB
-# ============================================================
 
 def execute_queued_video_job(
     job_id: str,
@@ -294,22 +288,19 @@ def execute_queued_video_job(
     model_path: Optional[str] = None,
     language: str = DEFAULT_LANGUAGE,
     max_clips: int = DEFAULT_MAX_CLIPS,
-    output_dir: str | Path = JOB_OUTPUT_DIR,
-    make_vertical: bool = DEFAULT_MAKE_VERTICAL,
-    keep_audio: bool = DEFAULT_KEEP_AUDIO,
+    output_dir: str = "output/jobs",
+    make_vertical: bool = True,
+    keep_audio: bool = False,
 ) -> dict:
     """
-    Execute an already-created video job.
+    Execute a queued video job.
 
-    This delegates downloading and processing to job_runner.
+    The job's stored Pro V2 settings are used automatically.
     """
 
     job = load_job(job_id)
 
-    if job.get("job_type") != "video":
-        raise ValueError(
-            f"Job {job_id} is not a video job."
-        )
+    from core.job_runner import run_video_job
 
     return run_video_job(
         job_id=job_id,
@@ -323,10 +314,6 @@ def execute_queued_video_job(
     )
 
 
-# ============================================================
-# JOB UPDATE
-# ============================================================
-
 def update_job(
     job_id: str,
     status: str,
@@ -334,7 +321,7 @@ def update_job(
     error: Optional[str] = None,
 ) -> dict:
     """
-    Update an existing persisted job.
+    Update persisted job state.
     """
 
     job = load_job(job_id)
@@ -346,19 +333,35 @@ def update_job(
 
     if error is not None:
         job["error"] = error
-    elif status != "failed":
+
+    if status != "failed":
         job["error"] = None
 
-    from core.config import get_job_file
+    save_job_dict(job)
+
+    return job
+
+
+def save_job_dict(job: dict) -> str:
+    """
+    Persist a dictionary job without requiring a Job dataclass.
+    """
+
+    from pathlib import Path
     import json
 
-    job_file = get_job_file(job_id)
+    job_file = (
+        Path(__file__).resolve().parent.parent
+        / "jobs"
+        / f"{job['job_id']}.json"
+    )
 
-    with job_file.open(
-        "w",
-        encoding="utf-8",
-    ) as file:
+    job_file.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
+    with job_file.open("w", encoding="utf-8") as file:
         json.dump(
             job,
             file,
@@ -366,138 +369,82 @@ def update_job(
             ensure_ascii=False,
         )
 
-    return job
+    return str(job_file)
 
-
-# ============================================================
-# JOB STATUS
-# ============================================================
-
-def get_job_status(
-    job_id: str,
-) -> dict:
-    """
-    Return the current persisted job state.
-    """
-
-    return load_job(job_id)
-
-
-# ============================================================
-# GENERIC DISPATCHER
-# ============================================================
 
 def execute_job(
-    job_type: str,
-    input_value: str,
-    reference_url: Optional[str] = None,
-    **kwargs,
+    job_id: str,
+    whisper_command: Optional[str] = None,
+    model_path: Optional[str] = None,
+    language: str = DEFAULT_LANGUAGE,
+    max_clips: int = DEFAULT_MAX_CLIPS,
+    output_dir: str = "output/jobs",
+    make_vertical: bool = True,
+    keep_audio: bool = False,
 ) -> dict:
     """
-    Generic high-level dispatcher.
-
-    Supported:
-
-        topic
-        video
-
+    Generic job dispatcher.
     """
 
-    job_type = job_type.strip().lower()
+    job = load_job(job_id)
 
-    if job_type == "topic":
-
-        return execute_topic_job(
-            topic=input_value,
-            reference_url=reference_url,
-            research_limit=kwargs.get(
-                "research_limit",
-                DEFAULT_RESEARCH_LIMIT,
-            ),
-            output_dir=kwargs.get(
-                "output_dir",
-                JOB_OUTPUT_DIR,
-            ),
-        )
+    job_type = job.get("job_type")
 
     if job_type == "video":
+        return execute_queued_video_job(
+            job_id=job_id,
+            whisper_command=whisper_command,
+            model_path=model_path,
+            language=language,
+            max_clips=max_clips,
+            output_dir=output_dir,
+            make_vertical=make_vertical,
+            keep_audio=keep_audio,
+        )
 
-        return execute_video_job(
-            video_path=input_value,
-            topic=kwargs.get("topic"),
-            reference_url=reference_url,
-            whisper_command=kwargs.get(
-                "whisper_command"
+    if job_type == "topic":
+        return execute_topic_job(
+            topic=job.get("input_value", ""),
+            reference_url=job.get("reference_url"),
+            duration=job.get("duration", 30),
+            caption_style=job.get(
+                "caption_style",
+                "Bold Viral",
             ),
-            model_path=kwargs.get(
-                "model_path"
+            caption_settings=job.get(
+                "caption_settings"
             ),
-            language=kwargs.get(
-                "language",
-                DEFAULT_LANGUAGE,
-            ),
-            max_clips=kwargs.get(
-                "max_clips",
-                DEFAULT_MAX_CLIPS,
-            ),
-            output_dir=kwargs.get(
-                "output_dir",
-                JOB_OUTPUT_DIR,
-            ),
-            make_vertical=kwargs.get(
-                "make_vertical",
-                DEFAULT_MAKE_VERTICAL,
-            ),
-            keep_audio=kwargs.get(
-                "keep_audio",
-                DEFAULT_KEEP_AUDIO,
+            editing_settings=job.get(
+                "editing_settings"
             ),
         )
 
-    raise ValueError(
-        f"Unsupported job type: {job_type}"
-    )
+    return {
+        "success": False,
+        "status": "failed",
+        "job_id": job_id,
+        "error": f"Unsupported job type: {job_type}",
+    }
 
-
-# ============================================================
-# HEALTH / CAPABILITY SUMMARY
-# ============================================================
 
 def get_orchestrator_info() -> dict:
     """
-    Return a simple overview of available workflows.
+    Return information about supported workflows.
     """
 
     return {
-        "status": "ready",
+        "name": "Auto Faceless Video Creator V2",
+        "version": "2.0",
         "workflows": {
-            "topic": {
-                "enabled": True,
-                "stages": [
-                    "validation",
-                    "research",
-                    "source_analysis",
-                    "script_generation",
-                ],
-            },
-            "video": {
-                "enabled": True,
-                "stages": [
-                    "validation",
-                    "transcription",
-                    "clip_analysis",
-                    "video_processing",
-                    "optional_research",
-                    "optional_script_generation",
-                ],
-            },
-            "queued_video": {
-                "enabled": True,
-                "stages": [
-                    "job_loading",
-                    "download",
-                    "pipeline_execution",
-                ],
-            },
+            "topic": True,
+            "video": True,
+            "queued_video": True,
+        },
+        "pro_features": {
+            "duration_control": True,
+            "caption_settings": True,
+            "dynamic_editing": True,
+            "story_rebuild": True,
+            "multi_source_research": True,
         },
     }

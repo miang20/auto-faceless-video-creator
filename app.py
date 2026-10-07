@@ -2,6 +2,7 @@ import urllib.request
 import json
 
 import streamlit as st
+import uuid
 
 from core.config import (
     GITHUB_OWNER,
@@ -259,6 +260,7 @@ if st.button(
         token = get_github_token()
 
         job = create_job(
+            job_id=str(uuid.uuid4()),
             job_type="video",
             input_value=video_url,
             reference_url=reference,
@@ -271,9 +273,10 @@ if st.button(
         with st.spinner(
             "Adding V2 job to GitHub queue..."
         ):
+            job_data = job.to_dict() if hasattr(job, "to_dict") else job
             job_path = create_github_job(
                 token=token,
-                job=job,
+                job=job_data,
             )
 
         st.success(
