@@ -32,8 +32,8 @@
     "dynamic_zoom": true,
     "remove_silence": true
   },
-  "status": "running",
+  "status": "failed",
   "result_path": null,
-  "error": null,
+  "error": "409 Client Error: Conflict for url: https://api.github.com/repos/miang20/auto-faceless-video-creator/contents/jobs/99656e41-afce-4baf-b728-7320c2ae88da.json?ref=main",
   "created_at": "2026-10-07T20:34:28.618850+00:00"
 }
