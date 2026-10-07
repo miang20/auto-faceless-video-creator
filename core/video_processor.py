@@ -1,690 +1,795 @@
+"""
+Pro V2 Video Processor
+
+Takes a generated story/edit blueprint and renders a vertical 9:16 video.
+
+Important:
+- No narration is generated.
+- Source audio/dialogue is preserved.
+- FFmpeg remains the rendering engine.
+- Missing optional features gracefully fall back instead of breaking the job.
+"""
+
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import subprocess
-from pathlib import Path
-from typing import Optional
+import tempfile
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
-# =========================================================
-# CONFIG
-# =========================================================
-
-DEFAULT_OUTPUT_DIR = Path("output/clips")
-
-VIDEO_EXTENSIONS = {
-    ".mp4",
-    ".mkv",
-    ".webm",
-    ".mov",
-    ".avi",
-    ".m4v",
-}
+DEFAULT_OUTPUT_WIDTH = 1080
+DEFAULT_OUTPUT_HEIGHT = 1920
+DEFAULT_FPS = 30
+DEFAULT_CRF = 20
 
 
-# =========================================================
-# VALIDATION
-# =========================================================
-
-def ensure_ffmpeg() -> None:
-    """
-    Make sure FFmpeg is available.
-    """
-
-    if shutil.which("ffmpeg") is None:
-        raise RuntimeError(
-            "FFmpeg was not found on this system."
-        )
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
-def validate_video_path(
-    video_path: str | Path,
-) -> Path:
-    """
-    Validate an input video path.
-    """
-
-    path = Path(video_path)
-
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Video not found: {path}"
-        )
-
-    if not path.is_file():
-        raise ValueError(
-            f"Video path is not a file: {path}"
-        )
-
-    if (
-        path.suffix.lower()
-        not in VIDEO_EXTENSIONS
-    ):
-        raise ValueError(
-            f"Unsupported video format: {path.suffix}"
-        )
-
-    return path
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
-# =========================================================
-# TIMESTAMP HELPERS
-# =========================================================
-
-def clamp(
+def _clamp(
     value: float,
-    minimum: float,
-    maximum: float,
+    minimum: float = 0.0,
+    maximum: float = 1.0,
 ) -> float:
     return max(
         minimum,
-        min(
-            maximum,
-            value,
-        ),
+        min(maximum, value),
     )
 
 
-def format_timestamp(
-    seconds: float,
-) -> str:
-    """
-    Convert seconds to HH:MM:SS.mmm.
-    """
+def _clean_text(value: Any) -> str:
+    if value is None:
+        return ""
 
-    seconds = max(
-        0.0,
-        float(seconds),
-    )
+    return re.sub(
+        r"\s+",
+        " ",
+        str(value),
+    ).strip()
 
-    hours = int(
-        seconds // 3600
-    )
 
-    minutes = int(
-        (seconds % 3600) // 60
-    )
+def _run_command(
+    command: Sequence[str],
+    timeout: Optional[int] = None,
+) -> subprocess.CompletedProcess:
 
-    remaining = (
-        seconds % 60
-    )
-
-    return (
-        f"{hours:02d}:"
-        f"{minutes:02d}:"
-        f"{remaining:06.3f}"
+    return subprocess.run(
+        list(command),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
-# =========================================================
-# VIDEO INFORMATION
-# =========================================================
-
-def get_video_info(
-    video_path: str | Path,
-) -> dict:
-    """
-    Get basic video metadata through FFprobe.
-    """
-
-    ensure_ffmpeg()
-
-    path = validate_video_path(
-        video_path
-    )
-
-    command = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-show_entries",
-        (
-            "format=duration,size,"
-            "format_name"
-        ),
-        "-show_streams",
-        "-of",
-        "json",
-        str(path),
-    ]
-
-    try:
-
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=True,
+def _require_ffmpeg() -> None:
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError(
+            "FFmpeg was not found. Please ensure FFmpeg is installed "
+            "and available in PATH."
         )
 
-    except subprocess.CalledProcessError as exc:
 
-        raise RuntimeError(
-            "FFprobe failed while reading video information."
-        ) from exc
+def _probe_duration(video_path: str) -> float:
+    if not os.path.exists(video_path):
+        return 0.0
 
     try:
-
-        data = json.loads(
-            result.stdout
+        result = _run_command(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                video_path,
+            ],
+            timeout=15,
         )
 
-    except json.JSONDecodeError as exc:
+        if result.returncode != 0:
+            return 0.0
 
-        raise RuntimeError(
-            "FFprobe returned invalid JSON."
-        ) from exc
-
-    format_data = data.get(
-        "format",
-        {},
-    )
-
-    duration = float(
-        format_data.get(
-            "duration",
+        return max(
             0.0,
+            _safe_float(result.stdout.strip()),
         )
-        or 0.0
-    )
 
-    size = int(
-        format_data.get(
-            "size",
-            0,
-        )
-        or 0
-    )
-
-    video_stream = None
-
-    for stream in data.get(
-        "streams",
-        [],
+    except (
+        OSError,
+        subprocess.SubprocessError,
     ):
+        return 0.0
 
-        if stream.get(
-            "codec_type"
-        ) == "video":
 
-            video_stream = stream
-            break
+def _probe_dimensions(
+    video_path: str,
+) -> Tuple[int, int]:
 
-    width = 0
-    height = 0
-    fps = 0.0
-    codec = None
-
-    if video_stream:
-
-        width = int(
-            video_stream.get(
-                "width",
-                0,
-            )
-            or 0
+    try:
+        result = _run_command(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=s=x:p=0",
+                video_path,
+            ],
+            timeout=15,
         )
 
-        height = int(
-            video_stream.get(
-                "height",
-                0,
-            )
-            or 0
+        if result.returncode != 0:
+            return 0, 0
+
+        raw = result.stdout.strip()
+
+        if "x" not in raw:
+            return 0, 0
+
+        width, height = raw.split("x", 1)
+
+        return (
+            _safe_int(width),
+            _safe_int(height),
         )
 
-        codec = video_stream.get(
-            "codec_name"
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+    ):
+        return 0, 0
+
+
+def _ensure_parent(path: str) -> None:
+    parent = os.path.dirname(
+        os.path.abspath(path)
+    )
+
+    if parent:
+        os.makedirs(
+            parent,
+            exist_ok=True,
         )
 
-        fps_value = video_stream.get(
-            "r_frame_rate",
-            "0/1",
-        )
 
-        try:
-
-            numerator, denominator = (
-                fps_value.split("/")
-            )
-
-            denominator = float(
-                denominator
-            )
-
-            if denominator:
-                fps = (
-                    float(numerator)
-                    / denominator
-                )
-
-        except (
-            ValueError,
-            ZeroDivisionError,
-        ):
-            fps = 0.0
-
-    return {
-        "path": str(path),
-        "filename": path.name,
-        "format": format_data.get(
-            "format_name"
-        ),
-        "duration": duration,
-        "duration_timestamp": format_timestamp(
-            duration
-        ),
-        "size_bytes": size,
-        "width": width,
-        "height": height,
-        "fps": round(
-            fps,
-            3,
-        ),
-        "codec": codec,
-    }
-
-
-# =========================================================
-# OUTPUT PATH
-# =========================================================
-
-def create_output_directory(
-    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
-) -> Path:
-    """
-    Create and return output directory.
-    """
-
-    directory = Path(
-        output_dir
-    )
-
-    directory.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    return directory
-
-
-def build_clip_path(
-    output_dir: str | Path,
-    clip_number: int,
-    extension: str = ".mp4",
-) -> Path:
-    """
-    Build a deterministic output filename.
-    """
-
-    directory = create_output_directory(
-        output_dir
-    )
-
-    extension = extension.lower()
-
-    if not extension.startswith("."):
-        extension = "." + extension
-
-    return (
-        directory
-        / f"clip_{clip_number:03d}{extension}"
-    )
-
-
-# =========================================================
-# SINGLE CLIP EXTRACTION
-# =========================================================
-
-def extract_clip(
-    video_path: str | Path,
-    start: float,
-    end: float,
-    output_path: str | Path,
-    re_encode: bool = True,
-) -> str:
-    """
-    Extract one clip from a source video.
-
-    Re-encoding is the default because it gives reliable
-    frame-accurate cuts and predictable output.
-    """
-
-    ensure_ffmpeg()
-
-    source = validate_video_path(
-        video_path
-    )
+def _normalize_clip(
+    clip: Dict[str, Any],
+) -> Dict[str, Any]:
 
     start = max(
         0.0,
-        float(start),
+        _safe_float(
+            clip.get(
+                "source_start",
+                clip.get(
+                    "start",
+                    clip.get("start_time", 0.0),
+                ),
+            )
+        ),
     )
 
-    end = max(
-        start,
-        float(end),
+    end = _safe_float(
+        clip.get(
+            "source_end",
+            clip.get(
+                "end",
+                clip.get("end_time", 0.0),
+            ),
+        )
+    )
+
+    duration = _safe_float(
+        clip.get("source_duration")
+        or clip.get("duration")
     )
 
     if end <= start:
-        raise ValueError(
-            "Clip end must be greater than clip start."
+        if duration > 0:
+            end = start + duration
+        else:
+            end = start + 3.0
+
+    return {
+        "start": start,
+        "end": max(
+            start + 0.1,
+            end,
+        ),
+        "duration": max(
+            0.1,
+            end - start,
+        ),
+        "role": str(
+            clip.get(
+                "role",
+                clip.get(
+                    "story_role",
+                    "SETUP",
+                ),
+            )
+        ).upper(),
+        "score": _safe_float(
+            clip.get("score")
+        ),
+        "text": _clean_text(
+            clip.get("text")
+        ),
+    }
+
+
+def _extract_timeline(
+    script: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+
+    if not isinstance(script, dict):
+        return []
+
+    timeline = script.get("timeline")
+
+    if not isinstance(timeline, list):
+        return []
+
+    result = []
+
+    for item in timeline:
+        if isinstance(item, dict):
+            normalized = _normalize_clip(item)
+
+            if normalized["duration"] > 0:
+                result.append(normalized)
+
+    return result
+
+
+def _escape_drawtext(text: str) -> str:
+    """
+    Escape text for FFmpeg drawtext filter syntax.
+    """
+
+    text = str(text)
+
+    replacements = [
+        ("\\", r"\\\\"),
+        (":", r"\:"),
+        ("'", r"\'"),
+        ("%", r"\%"),
+        ("[", r"\["),
+        ("]", r"\]"),
+    ]
+
+    for old, new in replacements:
+        text = text.replace(
+            old,
+            new,
         )
 
-    output = Path(
-        output_path
+    return text
+
+
+def _find_font_file(
+    requested_font: str = "",
+) -> Optional[str]:
+
+    candidates = []
+
+    requested_font = _clean_text(
+        requested_font
     )
 
-    output.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    if requested_font:
+        candidates.extend(
+            [
+                requested_font,
+                f"/system/fonts/{requested_font}.ttf",
+                f"/usr/share/fonts/truetype/dejavu/{requested_font}.ttf",
+            ]
+        )
 
-    duration = end - start
-
-    if re_encode:
-
-        command = [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            str(start),
-            "-i",
-            str(source),
-            "-t",
-            str(duration),
-            "-map",
-            "0:v:0?",
-            "-map",
-            "0:a:0?",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            "20",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-movflags",
-            "+faststart",
-            str(output),
+    candidates.extend(
+        [
+            "/system/fonts/Roboto-Bold.ttf",
+            "/system/fonts/Roboto-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         ]
+    )
 
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+
+    return None
+
+
+def _caption_position(
+    position: str,
+) -> Tuple[str, str]:
+
+    position = (
+        _clean_text(position)
+        .lower()
+    )
+
+    if position in {
+        "top",
+        "top center",
+        "upper",
+    }:
+        return (
+            "(w-text_w)/2",
+            "h*0.14",
+        )
+
+    if position in {
+        "bottom",
+        "bottom center",
+        "lower",
+    }:
+        return (
+            "(w-text_w)/2",
+            "h*0.78",
+        )
+
+    return (
+        "(w-text_w)/2",
+        "(h-text_h)/2",
+    )
+
+
+def _caption_filter(
+    caption_settings: Dict[str, Any],
+) -> Optional[str]:
+
+    if not caption_settings:
+        return None
+
+    if caption_settings.get(
+        "enabled",
+        True,
+    ) is False:
+        return None
+
+    style = _clean_text(
+        caption_settings.get(
+            "style",
+            "Bold Viral",
+        )
+    ).lower()
+
+    font_size = _safe_int(
+        caption_settings.get(
+            "font_size",
+            54,
+        ),
+        54,
+    )
+
+    font_size = max(
+        24,
+        min(
+            110,
+            font_size,
+        ),
+    )
+
+    position = caption_settings.get(
+        "position",
+        "center",
+    )
+
+    x, y = _caption_position(
+        position
+    )
+
+    text_color = _clean_text(
+        caption_settings.get(
+            "text_color",
+            "white",
+        )
+    ) or "white"
+
+    highlight_color = _clean_text(
+        caption_settings.get(
+            "highlight_color",
+            "yellow",
+        )
+    ) or "yellow"
+
+    stroke_enabled = bool(
+        caption_settings.get(
+            "stroke",
+            True,
+        )
+    )
+
+    shadow_enabled = bool(
+        caption_settings.get(
+            "shadow",
+            True,
+        )
+    )
+
+    box_enabled = bool(
+        caption_settings.get(
+            "box",
+            False,
+        )
+    )
+
+    font = _find_font_file(
+        caption_settings.get(
+            "font",
+            "",
+        )
+    )
+
+    if font:
+        font_option = (
+            f"fontfile='{_escape_drawtext(font)}'"
+        )
     else:
+        font_option = "font='DejaVu Sans'"
 
-        command = [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            str(start),
-            "-i",
-            str(source),
-            "-t",
-            str(duration),
-            "-c",
-            "copy",
-            str(output),
-        ]
-
-    try:
-
-        subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=True,
+    if style == "minimal bottom":
+        x, y = _caption_position(
+            "bottom"
         )
 
-    except subprocess.CalledProcessError as exc:
+    elif style == "clean":
+        stroke_enabled = False
+        shadow_enabled = False
 
-        error = (
-            exc.stderr
-            or "Unknown FFmpeg error."
+    elif style == "impact":
+        font_size = max(
+            font_size,
+            64,
         )
 
-        raise RuntimeError(
-            f"FFmpeg clip extraction failed: {error}"
-        ) from exc
+    elif style == "karaoke":
+        text_color = highlight_color
 
-    if not output.exists():
-        raise RuntimeError(
-            f"FFmpeg finished but output was not created: "
-            f"{output}"
+    elif style == "mrbeast-style inspired":
+        stroke_enabled = True
+        shadow_enabled = True
+        box_enabled = False
+
+    parts = [
+        "drawtext",
+        font_option,
+        f"fontsize={font_size}",
+        f"fontcolor={text_color}",
+        f"x={x}",
+        f"y={y}",
+    ]
+
+    if stroke_enabled:
+        parts.extend(
+            [
+                "borderw=3",
+                "bordercolor=black",
+            ]
         )
 
-    return str(output)
-
-
-# =========================================================
-# CLIP BATCH PROCESSING
-# =========================================================
-
-def process_clip_candidates(
-    video_path: str | Path,
-    clips: list[dict],
-    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
-    re_encode: bool = True,
-) -> list[dict]:
-    """
-    Convert analyzed clip candidates into actual video files.
-    """
-
-    source = validate_video_path(
-        video_path
-    )
-
-    directory = create_output_directory(
-        output_dir
-    )
-
-    results = []
-
-    for index, clip in enumerate(
-        clips,
-        start=1,
-    ):
-
-        start = float(
-            clip.get(
-                "start",
-                0.0,
-            )
+    if shadow_enabled:
+        parts.extend(
+            [
+                "shadowx=2",
+                "shadowy=2",
+                "shadowcolor=black@0.65",
+            ]
         )
 
-        end = float(
-            clip.get(
-                "end",
-                0.0,
-            )
+    if box_enabled:
+        parts.extend(
+            [
+                "box=1",
+                "boxcolor=black@0.55",
+                "boxborderw=12",
+            ]
         )
 
-        if end <= start:
-            continue
-
-        output_path = build_clip_path(
-            output_dir=directory,
-            clip_number=index,
-        )
-
-        extracted_path = extract_clip(
-            video_path=source,
-            start=start,
-            end=end,
-            output_path=output_path,
-            re_encode=re_encode,
-        )
-
-        result = dict(clip)
-
-        result["clip_number"] = index
-        result["source_video"] = str(
-            source
-        )
-        result["output_path"] = extracted_path
-        result["processed"] = True
-
-        results.append(
-            result
-        )
-
-    return results
+    return ":".join(parts)
 
 
-# =========================================================
-# VERTICAL VIDEO SUPPORT
-# =========================================================
-
-def convert_to_vertical(
-    input_path: str | Path,
-    output_path: str | Path,
-    width: int = 1080,
-    height: int = 1920,
+def _vertical_crop_filter(
+    width: int,
+    height: int,
+    output_width: int,
+    output_height: int,
 ) -> str:
-    """
-    Convert a clip to 9:16 vertical format.
 
-    The source is scaled to fit while preserving aspect ratio,
-    with padding where necessary.
-    """
+    if width <= 0 or height <= 0:
+        return (
+            f"scale={output_width}:{output_height}"
+            ":force_original_aspect_ratio=increase,"
+            f"crop={output_width}:{output_height}"
+        )
 
-    ensure_ffmpeg()
+    source_ratio = width / height
+    target_ratio = output_width / output_height
 
-    source = validate_video_path(
+    if source_ratio > target_ratio:
+        # Source is wider. Crop left/right.
+        return (
+            f"scale=-2:{output_height},"
+            f"crop={output_width}:{output_height}"
+        )
+
+    return (
+        f"scale={output_width}:-2,"
+        f"crop={output_width}:{output_height}"
+    )
+
+
+def _zoom_filter(
+    duration: float,
+    enabled: bool = True,
+) -> str:
+
+    if not enabled:
+        return "scale=iw:ih"
+
+    duration = max(
+        0.5,
+        duration,
+    )
+
+    # Very subtle continuous punch-in.
+    # It avoids aggressive shaking and keeps the original frame stable.
+    return (
+        "zoompan="
+        "z='min(zoom+0.0008,1.08)':"
+        f"d='1':"
+        "x='iw/2-(iw/zoom/2)':"
+        "y='ih/2-(ih/zoom/2)':"
+        "s=1080x1920"
+    )
+
+
+def _build_video_filter(
+    width: int,
+    height: int,
+    output_width: int,
+    output_height: int,
+    duration: float,
+    editing_settings: Dict[str, Any],
+    caption_settings: Optional[Dict[str, Any]] = None,
+) -> str:
+
+    filters = []
+
+    filters.append(
+        _vertical_crop_filter(
+            width,
+            height,
+            output_width,
+            output_height,
+        )
+    )
+
+    dynamic_zoom = bool(
+        editing_settings.get(
+            "dynamic_zoom",
+            True,
+        )
+    )
+
+    punch_in = bool(
+        editing_settings.get(
+            "punch_in",
+            True,
+        )
+    )
+
+    if dynamic_zoom and punch_in:
+        # Keep this subtle. The crop itself provides the primary framing.
+        filters.append(
+            "scale=1080:1920"
+        )
+
+    if caption_settings:
+        caption = _caption_filter(
+            caption_settings
+        )
+
+        if caption:
+            filters.append(
+                caption
+            )
+
+    return ",".join(filters)
+
+
+def _render_single_segment(
+    input_path: str,
+    output_path: str,
+    clip: Dict[str, Any],
+    output_width: int,
+    output_height: int,
+    fps: int,
+    editing_settings: Dict[str, Any],
+    caption_settings: Optional[Dict[str, Any]],
+) -> str:
+
+    width, height = _probe_dimensions(
         input_path
     )
 
-    output = Path(
-        output_path
+    start = _safe_float(
+        clip.get("start")
     )
 
-    output.parent.mkdir(
-        parents=True,
-        exist_ok=True,
+    duration = _safe_float(
+        clip.get("duration")
     )
 
-    filter_graph = (
-        f"scale={width}:{height}:"
-        "force_original_aspect_ratio=decrease,"
-        f"pad={width}:{height}:"
-        f"(ow-iw)/2:(oh-ih)/2"
+    duration = max(
+        0.1,
+        duration,
+    )
+
+    video_filter = _build_video_filter(
+        width,
+        height,
+        output_width,
+        output_height,
+        duration,
+        editing_settings,
+        caption_settings,
     )
 
     command = [
         "ffmpeg",
         "-y",
+        "-ss",
+        f"{start:.3f}",
         "-i",
-        str(source),
+        input_path,
+        "-t",
+        f"{duration:.3f}",
         "-vf",
-        filter_graph,
+        video_filter,
+        "-r",
+        str(fps),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
         "-c:v",
         "libx264",
         "-preset",
-        "medium",
+        "veryfast",
         "-crf",
-        "20",
+        str(
+            _safe_int(
+                editing_settings.get(
+                    "crf",
+                    DEFAULT_CRF,
+                ),
+                DEFAULT_CRF,
+            )
+        ),
+        "-pix_fmt",
+        "yuv420p",
         "-c:a",
         "aac",
         "-b:a",
-        "192k",
-        "-movflags",
-        "+faststart",
-        str(output),
+        "160k",
     ]
 
-    try:
-
-        subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=True,
+    if bool(
+        editing_settings.get(
+            "audio_normalize",
+            True,
+        )
+    ):
+        command.extend(
+            [
+                "-af",
+                "loudnorm=I=-14:TP=-1.5:LRA=11",
+            ]
         )
 
-    except subprocess.CalledProcessError as exc:
+    command.extend(
+        [
+            "-movflags",
+            "+faststart",
+            output_path,
+        ]
+    )
 
-        raise RuntimeError(
-            "Failed to convert video to vertical format."
-        ) from exc
+    result = _run_command(
+        command,
+        timeout=900,
+    )
 
-    if not output.exists():
+    if result.returncode != 0:
         raise RuntimeError(
-            f"Vertical output was not created: {output}"
+            "FFmpeg failed while rendering segment:\n"
+            + result.stderr[-4000:]
         )
 
-    return str(output)
+    return output_path
 
 
-# =========================================================
-# CONCATENATION
-# =========================================================
+def _write_concat_file(
+    paths: Sequence[str],
+    concat_path: str,
+) -> None:
 
-def concatenate_clips(
-    clip_paths: list[str | Path],
-    output_path: str | Path,
+    with open(
+        concat_path,
+        "w",
+        encoding="utf-8",
+    ) as handle:
+
+        for path in paths:
+            safe_path = os.path.abspath(
+                path
+            ).replace(
+                "'",
+                "'\\''",
+            )
+
+            handle.write(
+                f"file '{safe_path}'\n"
+            )
+
+
+def _concat_segments(
+    segment_paths: Sequence[str],
+    output_path: str,
+    editing_settings: Dict[str, Any],
 ) -> str:
-    """
-    Concatenate processed clips into one video.
 
-    All clips should have compatible video/audio formats.
-    """
-
-    ensure_ffmpeg()
-
-    if not clip_paths:
+    if not segment_paths:
         raise ValueError(
-            "No clips were supplied for concatenation."
+            "No rendered segments were available."
         )
 
-    valid_paths = []
-
-    for clip_path in clip_paths:
-
-        path = validate_video_path(
-            clip_path
+    if len(segment_paths) == 1:
+        shutil.copy2(
+            segment_paths[0],
+            output_path,
         )
+        return output_path
 
-        valid_paths.append(
-            path
-        )
-
-    output = Path(
-        output_path
-    )
-
-    output.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    # Use a temporary concat file next to the output.
-    concat_file = (
-        output.parent
-        / f".{output.stem}_concat.txt"
-    )
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".txt",
+        delete=False,
+        encoding="utf-8",
+    ) as handle:
+        concat_path = handle.name
 
     try:
-
-        with concat_file.open(
-            "w",
-            encoding="utf-8",
-        ) as file:
-
-            for path in valid_paths:
-
-                safe_path = (
-                    str(path.resolve())
-                    .replace(
-                        "'",
-                        "'\\''",
-                    )
-                )
-
-                file.write(
-                    f"file '{safe_path}'\n"
-                )
+        _write_concat_file(
+            segment_paths,
+            concat_path,
+        )
 
         command = [
             "ffmpeg",
@@ -694,154 +799,379 @@ def concatenate_clips(
             "-safe",
             "0",
             "-i",
-            str(concat_file),
-            "-c",
-            "copy",
+            concat_path,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            str(
+                _safe_int(
+                    editing_settings.get(
+                        "crf",
+                        DEFAULT_CRF,
+                    ),
+                    DEFAULT_CRF,
+                )
+            ),
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-pix_fmt",
+            "yuv420p",
             "-movflags",
             "+faststart",
-            str(output),
+            output_path,
         ]
 
-        try:
-
-            subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-
-        except subprocess.CalledProcessError as exc:
-
-            raise RuntimeError(
-                "Failed to concatenate clips."
-            ) from exc
-
-    finally:
-
-        if concat_file.exists():
-            concat_file.unlink()
-
-    if not output.exists():
-        raise RuntimeError(
-            f"Concatenated video was not created: {output}"
+        result = _run_command(
+            command,
+            timeout=1200,
         )
 
-    return str(output)
+        if result.returncode != 0:
+            raise RuntimeError(
+                "FFmpeg failed while concatenating segments:\n"
+                + result.stderr[-4000:]
+            )
+
+    finally:
+        try:
+            os.remove(
+                concat_path
+            )
+        except OSError:
+            pass
+
+    return output_path
 
 
-# =========================================================
-# PROCESSING PIPELINE
-# =========================================================
+def _trim_to_target_duration(
+    input_path: str,
+    output_path: str,
+    target_duration: float,
+) -> str:
+
+    target_duration = max(
+        0.1,
+        target_duration,
+    )
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        "-t",
+        f"{target_duration:.3f}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        str(DEFAULT_CRF),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "160k",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        output_path,
+    ]
+
+    result = _run_command(
+        command,
+        timeout=900,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "FFmpeg failed while applying target duration:\n"
+            + result.stderr[-4000:]
+        )
+
+    return output_path
+
 
 def process_video(
-    video_path: str | Path,
-    clips: Optional[list[dict]] = None,
-    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
-    make_vertical: bool = False,
-) -> dict:
-    """
-    Main video processing entry point.
-
-    Input:
-        Source video + analyzed clip candidates.
-
-    Output:
-        Metadata + generated clip files.
-    """
-
-    source = validate_video_path(
-        video_path
-    )
-
-    video_info = get_video_info(
-        source
-    )
-
-    clips = clips or []
-
-    processed_clips = process_clip_candidates(
-        video_path=source,
-        clips=clips,
-        output_dir=output_dir,
-    )
-
-    if make_vertical:
-
-        vertical_clips = []
-
-        for item in processed_clips:
-
-            source_clip = Path(
-                item["output_path"]
-            )
-
-            vertical_path = (
-                source_clip.parent
-                / f"{source_clip.stem}_vertical.mp4"
-            )
-
-            converted = convert_to_vertical(
-                input_path=source_clip,
-                output_path=vertical_path,
-            )
-
-            updated = dict(item)
-
-            updated["original_output_path"] = (
-                updated["output_path"]
-            )
-
-            updated["output_path"] = converted
-            updated["vertical"] = True
-
-            vertical_clips.append(
-                updated
-            )
-
-        processed_clips = vertical_clips
-
-    return {
-        "version": "1.0",
-        "source": video_info,
-        "clip_count": len(
-            processed_clips
-        ),
-        "clips": processed_clips,
-    }
-
-
-# =========================================================
-# SAVE PROCESSING REPORT
-# =========================================================
-
-def save_processing_report(
-    report: dict,
-    output_path: str | Path,
+    input_path: str,
+    output_path: str,
+    script: Optional[Dict[str, Any]] = None,
+    clip_analysis: Optional[Dict[str, Any]] = None,
+    target_duration: Optional[float] = None,
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[Dict[str, Any]] = None,
+    editing_settings: Optional[Dict[str, Any]] = None,
+    output_width: int = DEFAULT_OUTPUT_WIDTH,
+    output_height: int = DEFAULT_OUTPUT_HEIGHT,
+    fps: int = DEFAULT_FPS,
 ) -> str:
-    """
-    Save processing results as JSON.
-    """
 
-    output = Path(
+    _require_ffmpeg()
+
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(
+            f"Input video not found: {input_path}"
+        )
+
+    _ensure_parent(
         output_path
     )
 
-    output.parent.mkdir(
-        parents=True,
-        exist_ok=True,
+    script = dict(
+        script or {}
     )
 
-    with output.open(
+    editing = dict(
+        editing_settings
+        or script.get("editing")
+        or {}
+    )
+
+    captions = dict(
+        caption_settings
+        or script.get("caption")
+        or {}
+    )
+
+    if "style" not in captions:
+        captions["style"] = (
+            caption_style
+            or "Bold Viral"
+        )
+
+    timeline = _extract_timeline(
+        script
+    )
+
+    if not timeline and isinstance(
+        clip_analysis,
+        dict,
+    ):
+
+        raw_clips = clip_analysis.get(
+            "clips"
+        )
+
+        if not isinstance(
+            raw_clips,
+            list,
+        ):
+            raw_clips = (
+                clip_analysis
+                .get("analysis", {})
+                .get("clips", [])
+            )
+
+        if isinstance(
+            raw_clips,
+            list,
+        ):
+            timeline = [
+                _normalize_clip(
+                    clip
+                )
+                for clip in raw_clips
+                if isinstance(
+                    clip,
+                    dict,
+                )
+            ]
+
+    if not timeline:
+        raise ValueError(
+            "No usable clip timeline was found."
+        )
+
+    requested_duration = (
+        _safe_float(
+            target_duration
+        )
+        if target_duration is not None
+        else _safe_float(
+            script.get(
+                "target_duration",
+                0.0,
+            )
+        )
+    )
+
+    temp_dir = tempfile.mkdtemp(
+        prefix="pro_v2_render_"
+    )
+
+    segment_paths: List[str] = []
+
+    try:
+
+        for index, clip in enumerate(
+            timeline
+        ):
+
+            segment_path = os.path.join(
+                temp_dir,
+                f"segment_{index:03d}.mp4",
+            )
+
+            _render_single_segment(
+                input_path=input_path,
+                output_path=segment_path,
+                clip=clip,
+                output_width=output_width,
+                output_height=output_height,
+                fps=fps,
+                editing_settings=editing,
+                caption_settings=captions,
+            )
+
+            segment_paths.append(
+                segment_path
+            )
+
+        combined_path = os.path.join(
+            temp_dir,
+            "combined.mp4",
+        )
+
+        _concat_segments(
+            segment_paths,
+            combined_path,
+            editing,
+        )
+
+        if requested_duration > 0:
+
+            actual_duration = _probe_duration(
+                combined_path
+            )
+
+            # Only trim when the story is materially longer than requested.
+            # We never pad a short video with meaningless content.
+            if actual_duration > requested_duration + 0.25:
+
+                trimmed_path = os.path.join(
+                    temp_dir,
+                    "trimmed.mp4",
+                )
+
+                _trim_to_target_duration(
+                    combined_path,
+                    trimmed_path,
+                    requested_duration,
+                )
+
+                shutil.copy2(
+                    trimmed_path,
+                    output_path,
+                )
+
+            else:
+                shutil.copy2(
+                    combined_path,
+                    output_path,
+                )
+
+        else:
+            shutil.copy2(
+                combined_path,
+                output_path,
+            )
+
+        return output_path
+
+    finally:
+
+        shutil.rmtree(
+            temp_dir,
+            ignore_errors=True,
+        )
+
+
+def render_video(
+    input_path: str,
+    output_path: str,
+    script: Dict[str, Any],
+    **kwargs: Any,
+) -> str:
+
+    return process_video(
+        input_path=input_path,
+        output_path=output_path,
+        script=script,
+        **kwargs,
+    )
+
+
+def process_video_file(
+    input_path: str,
+    output_path: str,
+    script: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+) -> str:
+
+    return process_video(
+        input_path=input_path,
+        output_path=output_path,
+        script=script,
+        **kwargs,
+    )
+
+
+def build_video_report(
+    output_path: str,
+    script: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+
+    duration = _probe_duration(
+        output_path
+    )
+
+    width, height = _probe_dimensions(
+        output_path
+    )
+
+    return {
+        "output_path": output_path,
+        "duration": round(
+            duration,
+            3,
+        ),
+        "width": width,
+        "height": height,
+        "aspect_ratio": (
+            "9:16"
+            if height > width
+            else "other"
+        ),
+        "exists": os.path.exists(
+            output_path
+        ),
+        "script": script or {},
+    }
+
+
+def save_video_report(
+    report: Dict[str, Any],
+    output_path: str,
+) -> str:
+
+    _ensure_parent(
+        output_path
+    )
+
+    with open(
+        output_path,
         "w",
         encoding="utf-8",
-    ) as file:
-
+    ) as handle:
         json.dump(
             report,
-            file,
+            handle,
             indent=2,
             ensure_ascii=False,
         )
 
-    return str(output)
+    return output_path
