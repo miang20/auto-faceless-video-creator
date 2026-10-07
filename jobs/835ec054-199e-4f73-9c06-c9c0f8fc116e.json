@@ -32,8 +32,8 @@
     "dynamic_zoom": true,
     "remove_silence": true
   },
-  "status": "failed",
+  "status": "running",
   "result_path": null,
-  "error": "Whisper transcription failed: whisper_init_from_file_with_params_no_state: loading model from '/data/data/com.termux/files/home/v2-test/whisper.cpp/models/ggml-small.bin'\nwhisper_init_with_params_no_state: use gpu    = 1\nwhisper_init_with_params_no_state: flash attn = 1\nwhisper_init_with_params_no_state: gpu_device = 0\nwhisper_init_with_params_no_state: dtw        = 0\nwhisper_init_with_params_no_state: devices    = 1\nwhisper_init_with_params_no_state: backends   = 1\nwhisper_model_load: loading model\nwhisper_model_load: invalid model data (bad magic)\nwhisper_init_with_params_no_state: failed to load model\nerror: failed to initialize whisper context\n",
+  "error": null,
   "created_at": "2026-10-07T08:30:55.422343+00:00"
 }
