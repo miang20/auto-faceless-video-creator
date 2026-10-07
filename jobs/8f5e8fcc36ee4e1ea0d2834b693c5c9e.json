@@ -40,8 +40,8 @@
     "max_clips": 10,
     "language": "English"
   },
-  "status": "failed",
+  "status": "running",
   "result_path": null,
-  "error": "Job not found: 8f5e8fcc36ee4e1ea0d2834b693c5c9e",
+  "error": null,
   "created_at": "2026-10-07T06:57:06.698528+00:00"
 }
