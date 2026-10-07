@@ -1,35 +1,9 @@
-from __future__ import annotations
-
-import json
-import urllib.error
-import urllib.request
-from pathlib import Path
-from typing import Any
+import uuid
 
 import streamlit as st
 
-from core.config import (
-    DEFAULT_KEEP_AUDIO,
-    DEFAULT_LANGUAGE,
-    DEFAULT_MAKE_VERTICAL,
-    DEFAULT_MAX_CLIPS,
-    DEFAULT_RESEARCH_LIMIT,
-    GITHUB_OWNER,
-    GITHUB_REPO,
-    JOB_OUTPUT_DIR,
-)
-
+from core.jobs import create_job
 from core.github_jobs import create_github_job
-
-from core.orchestrator import (
-    create_orchestrator_job,
-    execute_topic_job,
-)
-
-from core.validator import (
-    validate_reference_url,
-    validate_video_url,
-)
 
 
 # ============================================================
@@ -37,7 +11,7 @@ from core.validator import (
 # ============================================================
 
 st.set_page_config(
-    page_title="Auto Faceless Video Creator",
+    page_title="Auto Faceless Studio",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -45,1053 +19,352 @@ st.set_page_config(
 
 
 # ============================================================
-# CONSTANTS
+# PREMIUM UI
 # ============================================================
 
-APP_TITLE = "Auto Faceless Video Creator"
-APP_VERSION = "V2"
-
-SUPPORTED_VIDEO_EXTENSIONS = {
-    ".mp4",
-    ".mov",
-    ".mkv",
-    ".webm",
-    ".m4v",
-}
-
-CAPTION_PRESETS = {
-    "Clean White": {
-        "description": "Clean, readable white captions.",
-        "style": "clean_white",
-    },
-    "Bold Viral": {
-        "description": "Large high-impact captions for short-form content.",
-        "style": "bold_viral",
-    },
-    "Word Highlight": {
-        "description": "Word-by-word emphasis style.",
-        "style": "word_highlight",
-    },
-    "Big Center": {
-        "description": "Large centered captions.",
-        "style": "big_center",
-    },
-    "Bottom Subtitles": {
-        "description": "Traditional bottom subtitle layout.",
-        "style": "bottom_subtitles",
-    },
-}
-
-
-# ============================================================
-# GITHUB HELPERS
-# ============================================================
-
-def get_github_token() -> str:
+st.markdown(
     """
-    Read GitHub token from Streamlit secrets.
+    <style>
 
-    Supports:
-        GITHUB_TOKEN
-    """
-    try:
-        token = st.secrets.get("GITHUB_TOKEN")
-    except Exception:
-        token = None
+    /* ---------- GLOBAL ---------- */
 
-    if not token:
-        raise RuntimeError(
-            "GITHUB_TOKEN is missing from Streamlit secrets."
-        )
-
-    return str(token).strip()
-
-
-def github_request(
-    url: str,
-    token: str,
-    method: str = "GET",
-    data: bytes | None = None,
-    timeout: int = 30,
-) -> Any:
-    """
-    Generic GitHub API request helper.
-    """
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
+    .stApp {
+        background:
+            radial-gradient(
+                circle at 15% 10%,
+                rgba(94, 72, 255, 0.18),
+                transparent 30%
+            ),
+            radial-gradient(
+                circle at 85% 15%,
+                rgba(0, 214, 255, 0.12),
+                transparent 28%
+            ),
+            radial-gradient(
+                circle at 50% 90%,
+                rgba(168, 85, 247, 0.10),
+                transparent 32%
+            ),
+            #070910;
+        color: #f5f7ff;
     }
 
-    if data is not None:
-        headers["Content-Type"] = "application/json"
-
-    request = urllib.request.Request(
-        url,
-        data=data,
-        method=method,
-        headers=headers,
-    )
-
-    with urllib.request.urlopen(
-        request,
-        timeout=timeout,
-    ) as response:
-        body = response.read().decode("utf-8")
-
-    if not body:
-        return {}
-
-    return json.loads(body)
-
-
-@st.cache_data(ttl=10, show_spinner=False)
-def get_github_jobs_cached(
-    owner: str,
-    repo: str,
-    token: str,
-) -> list[dict]:
-    """
-    Fetch recent jobs from GitHub.
-
-    Short cache prevents unnecessary API requests while
-    still keeping the queue reasonably fresh.
-    """
-    url = (
-        f"https://api.github.com/repos/"
-        f"{owner}/{repo}/contents/jobs"
-    )
-
-    try:
-        data = github_request(
-            url=url,
-            token=token,
-            method="GET",
-            timeout=30,
-        )
-    except Exception:
-        return []
-
-    if not isinstance(data, list):
-        return []
-
-    jobs: list[dict] = []
-
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-
-        name = item.get("name", "")
-
-        if not str(name).endswith(".json"):
-            continue
-
-        download_url = item.get("download_url")
-
-        if not download_url:
-            continue
-
-        try:
-            job_data = github_request(
-                url=download_url,
-                token=token,
-                method="GET",
-                timeout=15,
-            )
-
-            if isinstance(job_data, dict):
-                jobs.append(job_data)
-
-        except Exception:
-            continue
-
-    jobs.sort(
-        key=lambda job: job.get(
-            "created_at",
-            "",
-        ),
-        reverse=True,
-    )
-
-    return jobs
-
-
-def get_github_jobs(token: str) -> list[dict]:
-    """
-    Public wrapper around cached GitHub job loading.
-    """
-    return get_github_jobs_cached(
-        GITHUB_OWNER,
-        GITHUB_REPO,
-        token,
-    )
-
-
-def clear_job_cache() -> None:
-    """
-    Clear cached GitHub jobs.
-    """
-    get_github_jobs_cached.clear()
-
-
-# ============================================================
-# STATUS HELPERS
-# ============================================================
-
-def normalize_status(status: str | None) -> str:
-    return str(status or "unknown").strip().lower()
-
-
-def display_job_status(
-    status: str | None,
-    compact: bool = False,
-) -> None:
-    """
-    Render consistent job status.
-    """
-    normalized = normalize_status(status)
-
-    labels = {
-        "queued": "QUEUED",
-        "downloading": "DOWNLOADING",
-        "processing": "PROCESSING",
-        "completed": "COMPLETED",
-        "failed": "FAILED",
-        "unknown": "UNKNOWN",
+    .main .block-container {
+        max-width: 1250px;
+        padding-top: 2rem;
+        padding-bottom: 4rem;
     }
 
-    label = labels.get(
-        normalized,
-        normalized.upper(),
-    )
-
-    if normalized == "completed":
-        st.success(
-            f"✅ {label}",
-            icon="✅",
-        )
-
-    elif normalized == "failed":
-        st.error(
-            f"❌ {label}",
-            icon="❌",
-        )
-
-    elif normalized in {
-        "downloading",
-        "processing",
-    }:
-        st.warning(
-            f"⏳ {label}",
-            icon="⏳",
-        )
-
-    else:
-        st.info(
-            f"📌 {label}",
-            icon="📌",
-        )
-
-
-def status_emoji(status: str | None) -> str:
-    normalized = normalize_status(status)
-
-    return {
-        "queued": "🟡",
-        "downloading": "🔵",
-        "processing": "🟠",
-        "completed": "🟢",
-        "failed": "🔴",
-    }.get(
-        normalized,
-        "⚪",
-    )
-
-
-# ============================================================
-# INPUT HELPERS
-# ============================================================
-
-def safe_text(value: Any) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def format_file_size(path: Path) -> str:
-    """
-    Human-readable file size.
-    """
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return "Unknown size"
-
-    units = [
-        "B",
-        "KB",
-        "MB",
-        "GB",
-        "TB",
-    ]
-
-    size_float = float(size)
-
-    for unit in units:
-        if size_float < 1024:
-            return f"{size_float:.1f} {unit}"
-
-        size_float /= 1024
-
-    return f"{size_float:.1f} PB"
-
-
-def is_video_file(path: Path) -> bool:
-    return (
-        path.is_file()
-        and path.suffix.lower()
-        in SUPPORTED_VIDEO_EXTENSIONS
-    )
-
-
-# ============================================================
-# LOCAL ARTIFACT HELPERS
-# ============================================================
-
-def get_possible_job_directories(
-    job_id: str,
-) -> list[Path]:
-    """
-    Return possible locations for generated artifacts.
-
-    Supports both the current flat output structure and
-    future per-job output directories.
-    """
-    candidates = [
-        JOB_OUTPUT_DIR,
-        JOB_OUTPUT_DIR / job_id,
-        Path("output") / "jobs",
-        Path("output") / "jobs" / job_id,
-        Path("output") / "clips",
-    ]
-
-    unique: list[Path] = []
-    seen: set[str] = set()
-
-    for path in candidates:
-        try:
-            key = str(path.resolve())
-        except Exception:
-            key = str(path)
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-        unique.append(path)
-
-    return unique
-
-
-def find_job_videos(
-    job_id: str,
-) -> list[Path]:
-    """
-    Find locally available generated video artifacts.
-    """
-    found: list[Path] = []
-    seen: set[str] = set()
-
-    for directory in get_possible_job_directories(
-        job_id
-    ):
-        if not directory.exists():
-            continue
-
-        try:
-            files = directory.rglob("*")
-        except Exception:
-            continue
-
-        for path in files:
-            if not is_video_file(path):
-                continue
-
-            filename = path.name.lower()
-
-            # Prefer generated clips rather than source downloads.
-            looks_relevant = (
-                job_id.lower() in filename
-                or "clip_" in filename
-                or "vertical" in filename
-                or directory.name in {
-                    "clips",
-                    job_id,
-                }
-            )
-
-            if not looks_relevant:
-                continue
-
-            try:
-                key = str(path.resolve())
-            except Exception:
-                key = str(path)
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-            found.append(path)
-
-    found.sort(
-        key=lambda path: path.stat().st_mtime
-        if path.exists()
-        else 0,
-        reverse=True,
-    )
-
-    return found
-
-
-def find_job_result_file(
-    job: dict,
-) -> Path | None:
-    """
-    Locate local result JSON if it exists.
-    """
-    result_path = safe_text(
-        job.get("result_path")
-    )
-
-    if result_path:
-        path = Path(result_path)
-
-        if path.exists() and path.is_file():
-            return path
-
-    job_id = safe_text(
-        job.get("job_id")
-    )
-
-    if not job_id:
-        return None
-
-    candidates = [
-        JOB_OUTPUT_DIR / f"{job_id}_result.json",
-        JOB_OUTPUT_DIR / job_id / f"{job_id}_result.json",
-    ]
-
-    for path in candidates:
-        if path.exists() and path.is_file():
-            return path
-
-    return None
-
-
-def load_local_result(
-    job: dict,
-) -> dict | None:
-    """
-    Load local pipeline result JSON.
-    """
-    result_file = find_job_result_file(job)
-
-    if not result_file:
-        return None
-
-    try:
-        with result_file.open(
-            "r",
-            encoding="utf-8",
-        ) as file:
-            data = json.load(file)
-
-        return data if isinstance(data, dict) else None
-
-    except Exception:
-        return None
-
-
-def extract_artifacts_from_result(
-    result: dict | None,
-) -> dict:
-    if not isinstance(result, dict):
-        return {}
-
-    artifacts = result.get(
-        "artifacts",
-        {},
-    )
-
-    return artifacts if isinstance(
-        artifacts,
-        dict,
-    ) else {}
-
-
-# ============================================================
-# VIDEO PREVIEW
-# ============================================================
-
-def render_video_artifact(
-    path: Path,
-    index: int,
-    total: int,
-) -> None:
-    """
-    Render one local generated video.
-    """
-    st.markdown(
-        f"### Clip {index}"
-    )
-
-    meta_col1, meta_col2 = st.columns(2)
-
-    with meta_col1:
-        st.caption(
-            f"📄 {path.name}"
-        )
-
-    with meta_col2:
-        st.caption(
-            f"💾 {format_file_size(path)}"
-        )
-
-    try:
-        with path.open(
-            "rb"
-        ) as video_file:
-            video_bytes = video_file.read()
-
-        st.video(
-            video_bytes,
-            format="video/mp4",
-        )
-
-        st.download_button(
-            label="⬇️ Download Clip",
-            data=video_bytes,
-            file_name=path.name,
-            mime="video/mp4",
-            key=f"download_{index}_{path.name}",
-            use_container_width=True,
-        )
-
-    except Exception as exc:
-        st.error(
-            f"Could not preview {path.name}: {exc}"
-        )
-
-
-def render_generated_outputs(
-    job: dict,
-) -> None:
-    """
-    Show generated clips when they exist on the
-    current Streamlit runtime.
-    """
-    job_id = safe_text(
-        job.get("job_id")
-    )
-
-    if not job_id:
-        return
-
-    videos = find_job_videos(
-        job_id
-    )
-
-    st.subheader(
-        "🎞️ Generated Videos"
-    )
-
-    if not videos:
-        st.info(
-            "Job completed, but generated video files "
-            "are not available on this Streamlit runtime yet."
-        )
-
-        st.caption(
-            "The current Termux worker stores generated "
-            "videos on the Termux machine. A future artifact "
-            "sync layer will make them remotely available "
-            "inside this app."
-        )
-
-        return
-
-    st.success(
-        f"Found {len(videos)} generated video artifact(s)."
-    )
-
-    for index, path in enumerate(
-        videos,
-        start=1,
-    ):
-        render_video_artifact(
-            path=path,
-            index=index,
-            total=len(videos),
-        )
-
-        if index != len(videos):
-            st.divider()
-
-
-# ============================================================
-# CAPTION UI
-# ============================================================
-
-def render_caption_panel(
-    job: dict,
-) -> None:
-    """
-    Caption-style selection UI.
-
-    This stage stores the user's desired style in session
-    state. Actual FFmpeg caption rendering is intentionally
-    kept separate for the final-render phase.
-    """
-    st.subheader(
-        "✍️ Caption Style"
-    )
-
-    selected_name = st.selectbox(
-        "Choose caption style",
-        list(CAPTION_PRESETS.keys()),
-        index=1,
-        key=f"caption_style_{job.get('job_id', 'unknown')}",
-    )
-
-    selected = CAPTION_PRESETS[
-        selected_name
-    ]
-
-    st.info(
-        selected["description"]
-    )
-
-    st.session_state[
-        "selected_caption_style"
-    ] = selected["style"]
-
-    st.session_state[
-        "selected_caption_style_name"
-    ] = selected_name
-
-    st.caption(
-        "Caption rendering is the next production stage. "
-        "The selected preset is ready for the final-render system."
-    )
-
-
-# ============================================================
-# JOB CARD
-# ============================================================
-
-def render_job_card(
-    job: dict,
-    show_output: bool = False,
-) -> None:
-    job_id = safe_text(
-        job.get("job_id")
-    ) or "Unknown"
-
-    status = safe_text(
-        job.get("status")
-    ) or "unknown"
-
-    job_type = safe_text(
-        job.get("job_type")
-    ) or "unknown"
-
-    input_value = safe_text(
-        job.get("input_value")
-    )
-
-    reference_url = safe_text(
-        job.get("reference_url")
-    )
-
-    created_at = safe_text(
-        job.get("created_at")
-    )
-
-    result_path = safe_text(
-        job.get("result_path")
-    )
-
-    error = safe_text(
-        job.get("error")
-    )
-
-    with st.container(
-        border=True
-    ):
-        top_left, top_right = st.columns(
-            [4, 1]
-        )
-
-        with top_left:
-            st.markdown(
-                f"### {status_emoji(status)} {job_id}"
-            )
-
-            if input_value:
-                st.write(
-                    input_value
-                )
-
-        with top_right:
-            display_job_status(
-                status,
-                compact=True,
-            )
-
-        meta1, meta2, meta3 = st.columns(3)
-
-        with meta1:
-            st.caption(
-                f"Type: {job_type}"
-            )
-
-        with meta2:
-            if created_at:
-                st.caption(
-                    f"Created: {created_at}"
-                )
-
-        with meta3:
-            if result_path:
-                st.caption(
-                    f"Result: {result_path}"
-                )
-
-        if reference_url:
-            st.caption(
-                f"Reference: {reference_url}"
-            )
-
-        if error:
-            st.error(
-                error
-            )
-
-        if (
-            show_output
-            and normalize_status(status)
-            == "completed"
-        ):
-            st.divider()
-
-            render_generated_outputs(
-                job
-            )
-
-            render_caption_panel(
-                job
-            )
-
-
-# ============================================================
-# TOPIC RESULT UI
-# ============================================================
-
-def render_topic_result(
-    result: dict,
-) -> None:
-    """
-    Render topic research + analysis + script result.
-    """
-    if not result.get("success"):
-        st.error(
-            "❌ Topic pipeline failed."
-        )
-
-        error = safe_text(
-            result.get("error")
-        )
-
-        if error:
-            st.error(
-                error
-            )
-
-        return
-
-    research = result.get(
-        "research",
-        {},
-    )
-
-    source_analysis = result.get(
-        "source_analysis",
-        {},
-    )
-
-    script = result.get(
-        "script",
-        {},
-    )
-
-    artifacts = result.get(
-        "artifacts",
-        {},
-    )
-
-    sources = research.get(
-        "sources",
-        []
-    )
-
-    analyzed_sources = source_analysis.get(
-        "sources",
-        []
-    )
-
-    sections = script.get(
-        "sections",
-        []
-    )
-
-    st.success(
-        "✅ Research + analysis + production plan completed."
-    )
-
-    metric1, metric2, metric3 = st.columns(3)
-
-    with metric1:
-        st.metric(
-            "Sources Found",
-            len(sources),
-        )
-
-    with metric2:
-        st.metric(
-            "Sources Analyzed",
-            len(analyzed_sources),
-        )
-
-    with metric3:
-        st.metric(
-            "Script Sections",
-            len(sections),
-        )
-
-    # --------------------------------------------------------
-    # RESEARCH SOURCES
-    # --------------------------------------------------------
-
-    if sources:
-        st.subheader(
-            "🎥 Research Sources"
-        )
-
-        for index, source in enumerate(
-            sources,
-            start=1,
-        ):
-            if not isinstance(
-                source,
-                dict,
-            ):
-                continue
-
-            title = safe_text(
-                source.get("title")
-            ) or "Untitled"
-
-            video_url = safe_text(
-                source.get("url")
-            )
-
-            video_id = safe_text(
-                source.get("video_id")
-            )
-
-            channel = safe_text(
-                source.get("channel")
-            )
-
-            with st.container(
-                border=True
-            ):
-                st.markdown(
-                    f"**{index}. {title}**"
-                )
-
-                details = []
-
-                if channel:
-                    details.append(
-                        f"Channel: {channel}"
-                    )
-
-                if video_id:
-                    details.append(
-                        f"Video ID: {video_id}"
-                    )
-
-                if details:
-                    st.caption(
-                        " • ".join(details)
-                    )
-
-                if video_url:
-                    st.link_button(
-                        "▶️ Open YouTube Video",
-                        video_url,
-                    )
-
-    # --------------------------------------------------------
-    # SOURCE ANALYSIS
-    # --------------------------------------------------------
-
-    if analyzed_sources:
-        st.subheader(
-            "📊 Source Analysis"
-        )
-
-        for index, source in enumerate(
-            analyzed_sources[:20],
-            start=1,
-        ):
-            if not isinstance(
-                source,
-                dict,
-            ):
-                continue
-
-            title = safe_text(
-                source.get("title")
-            ) or "Untitled"
-
-            score = source.get(
-                "final_score",
-                source.get(
-                    "score",
-                    0,
-                ),
-            )
-
-            with st.container(
-                border=True
-            ):
-                col1, col2 = st.columns(
-                    [4, 1]
-                )
-
-                with col1:
-                    st.write(
-                        f"**#{index} {title}**"
-                    )
-
-                with col2:
-                    st.metric(
-                        "Score",
-                        score,
-                    )
-
-    # --------------------------------------------------------
-    # PRODUCTION PLAN
-    # --------------------------------------------------------
-
-    if script:
-        st.subheader(
-            "📝 Production Plan"
-        )
-
-        hook = safe_text(
-            script.get("hook")
-        )
-
-        if hook:
-            st.markdown(
-                "**🔥 Hook**"
-            )
-
-            st.info(
-                hook
-            )
-
-        if sections:
-            st.markdown(
-                "**Story Structure**"
-            )
-
-            for index, section in enumerate(
-                sections,
-                start=1,
-            ):
-                if isinstance(
-                    section,
-                    dict,
-                ):
-                    title = safe_text(
-                        section.get("title")
-                    ) or f"Section {index}"
-
-                    text = safe_text(
-                        section.get(
-                            "text",
-                            section.get(
-                                "content",
-                                "",
-                            ),
-                        )
-                    )
-
-                    st.markdown(
-                        f"**{index}. {title}**"
-                    )
-
-                    if text:
-                        st.write(
-                            text
-                        )
-
-                else:
-                    st.write(
-                        f"{index}. {section}"
-                    )
-
-    # --------------------------------------------------------
-    # ARTIFACTS
-    # --------------------------------------------------------
-
-    if artifacts:
-        with st.expander(
-            "📁 Pipeline Artifacts"
-        ):
-            for name, path in artifacts.items():
-                if not path:
-                    continue
-
-                st.markdown(
-                    f"**{name}**"
-                )
-
-                st.code(
-                    str(path)
-                )
-
-
-# ============================================================
-# HEADER
-# ============================================================
-
-st.title(
-    "🎬 Auto Faceless Video Creator"
+    /* ---------- SIDEBAR ---------- */
+
+    section[data-testid="stSidebar"] {
+        background:
+            linear-gradient(
+                180deg,
+                rgba(13, 17, 30, 0.98),
+                rgba(7, 9, 16, 0.98)
+            );
+        border-right: 1px solid rgba(255,255,255,0.07);
+    }
+
+    section[data-testid="stSidebar"] > div {
+        padding-top: 1.5rem;
+    }
+
+    /* ---------- TEXT ---------- */
+
+    h1, h2, h3 {
+        color: #f8f9ff !important;
+        letter-spacing: -0.025em;
+    }
+
+    p, label, .stMarkdown {
+        color: #c8ccda;
+    }
+
+    /* ---------- HERO ---------- */
+
+    .hero {
+        position: relative;
+        overflow: hidden;
+        padding: 34px 36px;
+        margin-bottom: 25px;
+        border-radius: 24px;
+        border: 1px solid rgba(255,255,255,0.09);
+        background:
+            linear-gradient(
+                135deg,
+                rgba(26, 31, 55, 0.96),
+                rgba(12, 16, 29, 0.96)
+            );
+        box-shadow:
+            0 25px 80px rgba(0,0,0,0.32),
+            inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+
+    .hero:before {
+        content: "";
+        position: absolute;
+        width: 260px;
+        height: 260px;
+        right: -100px;
+        top: -130px;
+        background: rgba(93, 73, 255, 0.22);
+        filter: blur(70px);
+        border-radius: 50%;
+    }
+
+    .hero-title {
+        font-size: 42px;
+        font-weight: 800;
+        line-height: 1.05;
+        margin-bottom: 12px;
+        color: #ffffff;
+    }
+
+    .hero-title span {
+        background: linear-gradient(
+            90deg,
+            #8b7cff,
+            #38d9ff
+        );
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+        color: #aeb5c9;
+        font-size: 16px;
+        max-width: 760px;
+        line-height: 1.6;
+    }
+
+    .hero-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+        margin-top: 20px;
+    }
+
+    .badge {
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.055);
+        border: 1px solid rgba(255,255,255,0.08);
+        color: #d9dded;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    /* ---------- CARDS ---------- */
+
+    .glass-card {
+        padding: 22px;
+        border-radius: 20px;
+        background: rgba(15, 19, 33, 0.78);
+        border: 1px solid rgba(255,255,255,0.075);
+        box-shadow:
+            0 16px 45px rgba(0,0,0,0.20),
+            inset 0 1px 0 rgba(255,255,255,0.025);
+        margin-bottom: 18px;
+    }
+
+    .card-title {
+        font-size: 18px;
+        font-weight: 750;
+        color: #f6f7ff;
+        margin-bottom: 5px;
+    }
+
+    .card-description {
+        font-size: 13px;
+        color: #8f97ad;
+        margin-bottom: 18px;
+    }
+
+    /* ---------- SECTION LABEL ---------- */
+
+    .section-label {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 28px 0 13px 2px;
+        font-size: 13px;
+        font-weight: 750;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: #8992aa;
+    }
+
+    /* ---------- INPUTS ---------- */
+
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="textarea"] > div {
+        background: rgba(255,255,255,0.035) !important;
+        border-color: rgba(255,255,255,0.09) !important;
+        border-radius: 12px !important;
+    }
+
+    input, textarea {
+        color: #f4f6ff !important;
+    }
+
+    /* ---------- BUTTON ---------- */
+
+    .stButton > button {
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.09);
+        background: rgba(255,255,255,0.045);
+        color: #e9ecf8;
+        font-weight: 650;
+        min-height: 44px;
+        transition: all 0.2s ease;
+    }
+
+    .stButton > button:hover {
+        border-color: rgba(120,110,255,0.55);
+        background: rgba(100,90,255,0.13);
+        transform: translateY(-1px);
+    }
+
+    /* ---------- PRIMARY BUTTON ---------- */
+
+    .primary-wrap button {
+        background:
+            linear-gradient(
+                100deg,
+                #6957ff,
+                #3dbfff
+            ) !important;
+        border: none !important;
+        color: white !important;
+        font-size: 16px !important;
+        font-weight: 800 !important;
+        min-height: 54px !important;
+        box-shadow:
+            0 12px 35px rgba(85, 100, 255, 0.28);
+    }
+
+    .primary-wrap button:hover {
+        filter: brightness(1.08);
+        transform: translateY(-2px);
+    }
+
+    /* ---------- RADIO ---------- */
+
+    div[role="radiogroup"] {
+        gap: 7px;
+    }
+
+    /* ---------- EXPANDER ---------- */
+
+    details {
+        background: rgba(255,255,255,0.025);
+        border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 14px;
+    }
+
+    /* ---------- STATUS ---------- */
+
+    .status-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 17px 19px;
+        border-radius: 16px;
+        background: rgba(255,255,255,0.035);
+        border: 1px solid rgba(255,255,255,0.07);
+        margin-bottom: 10px;
+    }
+
+    .status-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #49e38d;
+        box-shadow: 0 0 15px rgba(73,227,141,0.55);
+    }
+
+    .status-text {
+        color: #e7eaf5;
+        font-weight: 650;
+    }
+
+    .status-small {
+        color: #80889e;
+        font-size: 12px;
+    }
+
+    /* ---------- FOOTER ---------- */
+
+    .footer {
+        text-align: center;
+        color: #596177;
+        font-size: 12px;
+        padding-top: 25px;
+    }
+
+    /* ---------- MOBILE ---------- */
+
+    @media (max-width: 768px) {
+
+        .main .block-container {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+
+        .hero {
+            padding: 25px 22px;
+            border-radius: 19px;
+        }
+
+        .hero-title {
+            font-size: 30px;
+        }
+
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
-st.caption(
-    "V2 Control Center • "
-    "YouTube → Queue → Termux Worker → "
-    "Analysis → Clips → Captions → Final Render"
-)
 
-st.divider()
+# ============================================================
+# HERO
+# ============================================================
+
+st.markdown(
+    """
+    <div class="hero">
+        <div class="hero-title">
+            Auto Faceless <span>Studio</span>
+        </div>
+
+        <div class="hero-subtitle">
+            Turn a YouTube reference, topic or idea into a structured,
+            high-retention faceless short using the Pro V2 pipeline.
+        </div>
+
+        <div class="hero-badges">
+            <div class="badge">⚡ Smart Research</div>
+            <div class="badge">🎯 Hook Detection</div>
+            <div class="badge">🧠 Story Reconstruction</div>
+            <div class="badge">🎬 Dynamic Editing</div>
+            <div class="badge">💬 Viral Captions</div>
+            <div class="badge">📱 9:16 Output</div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================
@@ -1099,646 +372,650 @@ st.divider()
 # ============================================================
 
 with st.sidebar:
-    st.header(
-        "⚙️ Control Center"
-    )
 
     st.markdown(
-        f"**Version:** {APP_VERSION}"
+        """
+        <div style="
+            font-size:22px;
+            font-weight:800;
+            color:#f5f7ff;
+            margin-bottom:4px;
+        ">
+            🎬 Pro Controls
+        </div>
+
+        <div style="
+            color:#777f96;
+            font-size:12px;
+            margin-bottom:22px;
+        ">
+            V2 generation settings
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.markdown(
-        f"**Repository:** `{GITHUB_OWNER}/{GITHUB_REPO}`"
+    # --------------------------------------------------------
+    # DURATION
+    # --------------------------------------------------------
+
+    st.markdown("**⏱ Duration**")
+
+    duration_choice = st.selectbox(
+        "Video Duration",
+        [
+            "10 sec",
+            "15 sec",
+            "20 sec",
+            "30 sec",
+            "45 sec",
+            "60 sec",
+            "Custom",
+        ],
+        index=3,
+        label_visibility="collapsed",
+    )
+
+    duration_map = {
+        "10 sec": 10,
+        "15 sec": 15,
+        "20 sec": 20,
+        "30 sec": 30,
+        "45 sec": 45,
+        "60 sec": 60,
+    }
+
+    if duration_choice == "Custom":
+
+        duration = st.slider(
+            "Custom Duration",
+            5,
+            180,
+            30,
+            1,
+        )
+
+    else:
+
+        duration = duration_map[duration_choice]
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # CAPTIONS
+    # --------------------------------------------------------
+
+    st.markdown("**💬 Captions**")
+
+    caption_style = st.selectbox(
+        "Caption Style",
+        [
+            "Bold Viral",
+            "Karaoke",
+            "Clean",
+            "Impact",
+            "MrBeast-style",
+            "Minimal Bottom",
+            "Custom",
+        ],
+        index=0,
+    )
+
+    caption_size = st.slider(
+        "Font Size",
+        18,
+        100,
+        52,
+        2,
+    )
+
+    caption_position = st.selectbox(
+        "Position",
+        [
+            "Bottom",
+            "Lower Third",
+            "Center",
+            "Upper Third",
+            "Top",
+        ],
+        index=0,
+    )
+
+    caption_words_per_line = st.slider(
+        "Words / Line",
+        1,
+        8,
+        4,
+    )
+
+    caption_max_lines = st.slider(
+        "Maximum Lines",
+        1,
+        3,
+        2,
+    )
+
+    keyword_emphasis = st.checkbox(
+        "Keyword Emphasis",
+        True,
+    )
+
+    caption_stroke = st.checkbox(
+        "Stroke",
+        True,
+    )
+
+    caption_shadow = st.checkbox(
+        "Shadow",
+        True,
+    )
+
+    caption_box = st.checkbox(
+        "Background Box",
+        False,
     )
 
     st.divider()
 
-    st.subheader(
-        "System"
+    # --------------------------------------------------------
+    # EDITING
+    # --------------------------------------------------------
+
+    st.markdown("**🎬 Editing**")
+
+    dynamic_zoom = st.checkbox(
+        "Dynamic Punch-In / Zoom",
+        True,
     )
 
-    try:
-        github_token = get_github_token()
-        github_ready = bool(
-            github_token
-        )
-    except Exception:
-        github_token = None
-        github_ready = False
-
-    if github_ready:
-        st.success(
-            "GitHub Connected"
-        )
-    else:
-        st.error(
-            "GitHub Token Missing"
-        )
-
-    st.success(
-        "Job Queue Ready"
+    remove_silence = st.checkbox(
+        "Remove Dead Space",
+        True,
     )
 
-    st.success(
-        "Research Engine Ready"
+    normalize_audio = st.checkbox(
+        "Audio Normalization",
+        True,
     )
 
-    st.success(
-        "Pipeline Ready"
-    )
-
-    st.divider()
-
-    st.caption(
-        "Worker mode:"
-    )
-
-    st.info(
-        "ONE JOB MODE"
-    )
-
-    st.caption(
-        "Termux worker processes one eligible "
-        "queued video job and then stops."
+    visual_changes = st.selectbox(
+        "Visual Rhythm",
+        [
+            "Dynamic",
+            "Fast",
+            "Balanced",
+            "Slow",
+        ],
+        index=0,
     )
 
 
 # ============================================================
-# SYSTEM STATUS
+# MAIN WORKSPACE
 # ============================================================
 
-st.subheader(
-    "🟢 System Status"
+st.markdown(
+    '<div class="section-label">🚀 CREATE NEW VIDEO</div>',
+    unsafe_allow_html=True,
 )
 
-status1, status2, status3, status4 = st.columns(4)
-
-with status1:
-    if github_ready:
-        st.success(
-            "GitHub\nConnected"
-        )
-    else:
-        st.error(
-            "GitHub\nNot Connected"
-        )
-
-with status2:
-    st.success(
-        "Job Queue\nReady"
-    )
-
-with status3:
-    st.success(
-        "Research\nReady"
-    )
-
-with status4:
-    st.success(
-        "Pipeline\nReady"
-    )
-
-st.divider()
-
 
 # ============================================================
-# CREATE JOB
+# INPUT CARD
 # ============================================================
 
-st.subheader(
-    "🚀 Create New Video"
+st.markdown(
+    """
+    <div class="glass-card">
+        <div class="card-title">Choose Your Source</div>
+        <div class="card-description">
+            Give V2 a reference video or an idea. The pipeline will
+            analyze the context and build the strongest possible story.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-input_mode = st.selectbox(
+
+input_mode = st.radio(
     "Input Type",
     [
-        "YouTube Video URL",
+        "YouTube URL",
         "Topic",
         "Idea",
         "Keyword",
     ],
+    horizontal=True,
+    label_visibility="collapsed",
 )
 
 
-# ============================================================
-# INPUT
-# ============================================================
+if input_mode == "YouTube URL":
 
-if input_mode == "YouTube Video URL":
-    input_value = st.text_input(
-        "YouTube Video URL",
-        placeholder=(
-            "https://www.youtube.com/watch?v=..."
-        ),
-        key="video_url_input",
+    source_value = st.text_input(
+        "YouTube URL",
+        placeholder="https://www.youtube.com/watch?v=...",
+        label_visibility="collapsed",
+    )
+
+    st.caption(
+        "🔗 Reference video mode — V2 analyzes the source before rebuilding the story."
     )
 
 else:
-    input_value = st.text_input(
+
+    source_value = st.text_input(
         input_mode,
-        placeholder=(
-            f"Enter your "
-            f"{input_mode.lower()}..."
-        ),
-        key="topic_input",
+        placeholder=f"Enter your {input_mode.lower()}...",
+        label_visibility="collapsed",
+    )
+
+    st.caption(
+        "🔎 Research mode — V2 searches related sources and identifies useful footage."
     )
 
 
-reference_url = st.text_input(
-    "Reference URL (Optional)",
-    placeholder=(
-        "YouTube video, channel, article, or reference URL..."
-    ),
-    key="reference_url_input",
-)
-
-
 # ============================================================
-# PIPELINE SETTINGS
+# ADVANCED SETTINGS
 # ============================================================
 
-with st.expander(
-    "⚙️ Pipeline Settings",
-    expanded=False,
-):
-    col1, col2, col3 = st.columns(3)
+with st.expander("🧠 Advanced V2 Intelligence"):
+
+    col1, col2 = st.columns(2)
 
     with col1:
-        research_limit = st.number_input(
-            "Research Sources",
-            min_value=1,
-            max_value=50,
-            value=int(
-                DEFAULT_RESEARCH_LIMIT
-            ),
-            step=1,
-        )
 
-    with col2:
-        max_clips = st.number_input(
-            "Maximum Clips",
-            min_value=1,
-            max_value=100,
-            value=int(
-                DEFAULT_MAX_CLIPS
-            ),
-            step=1,
-        )
-
-    with col3:
         language = st.selectbox(
             "Language",
-            ["en"],
+            [
+                "English",
+                "Auto Detect",
+            ],
             index=0,
         )
 
-    make_vertical = st.checkbox(
-        "Create vertical clips (9:16)",
-        value=DEFAULT_MAKE_VERTICAL,
-    )
-
-    keep_audio = st.checkbox(
-        "Keep extracted audio files",
-        value=DEFAULT_KEEP_AUDIO,
-    )
-
-
-# ============================================================
-# CREATE BUTTON
-# ============================================================
-
-if input_mode == "YouTube Video URL":
-    button_label = "🚀 CREATE VIDEO JOB"
-else:
-    button_label = "🔎 RESEARCH & ANALYZE"
-
-
-if st.button(
-    button_label,
-    type="primary",
-    use_container_width=True,
-):
-    if not safe_text(input_value):
-        st.warning(
-            f"Please enter a {input_mode.lower()}."
+        max_clips = st.slider(
+            "Maximum Story Segments",
+            3,
+            20,
+            10,
         )
 
-        st.stop()
+    with col2:
 
-    # ========================================================
-    # VIDEO URL WORKFLOW
-    # ========================================================
+        research_enabled = st.checkbox(
+            "Multi-source Research",
+            True,
+        )
 
-    if input_mode == "YouTube Video URL":
+        contextual_broll = st.checkbox(
+            "Contextual B-roll",
+            True,
+        )
+
+        reaction_selection = st.checkbox(
+            "Reaction / Payoff Detection",
+            True,
+        )
+
+
+# ============================================================
+# SETTINGS OBJECTS
+# ============================================================
+
+caption_settings = {
+    "style": caption_style,
+    "font_size": caption_size,
+    "position": caption_position,
+    "words_per_line": caption_words_per_line,
+    "max_lines": caption_max_lines,
+    "keyword_emphasis": keyword_emphasis,
+    "stroke": caption_stroke,
+    "shadow": caption_shadow,
+    "box": caption_box,
+}
+
+
+editing_settings = {
+    "dynamic_zoom": dynamic_zoom,
+    "remove_silence": remove_silence,
+    "normalize_audio": normalize_audio,
+    "visual_change_rhythm": visual_changes,
+    "research_enabled": research_enabled,
+    "contextual_broll": contextual_broll,
+    "reaction_selection": reaction_selection,
+    "max_clips": max_clips,
+    "language": language,
+}
+
+
+# ============================================================
+# GENERATE BUTTON
+# ============================================================
+
+st.markdown(
+    "<br>",
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="primary-wrap">',
+    unsafe_allow_html=True,
+)
+
+generate = st.button(
+    "✨  CREATE PRO V2 VIDEO",
+    type="primary",
+    use_container_width=True,
+)
+
+st.markdown(
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# JOB CREATION
+# ============================================================
+
+if generate:
+
+    if not source_value.strip():
+
+        st.error(
+            "Please enter a YouTube URL, topic, idea or keyword."
+        )
+
+    else:
+
         try:
-            video_url = validate_video_url(
-                input_value
+
+            # ------------------------------------------------
+            # GITHUB TOKEN
+            # ------------------------------------------------
+
+            try:
+                github_token = st.secrets["GITHUB_TOKEN"]
+            except Exception:
+                github_token = ""
+
+            if not github_token:
+
+                st.error(
+                    "GITHUB_TOKEN is missing from Streamlit Secrets."
+                )
+
+                st.stop()
+
+            # ------------------------------------------------
+            # INPUT TYPE
+            # ------------------------------------------------
+
+            if input_mode == "YouTube URL":
+
+                job_type = "download"
+
+            else:
+
+                job_type = "topic"
+
+            # ------------------------------------------------
+            # CREATE JOB
+            # ------------------------------------------------
+
+            job_id = uuid.uuid4().hex
+
+            job = create_job(
+                job_id=job_id,
+                job_type=job_type,
+                input_value=source_value.strip(),
+                duration=duration,
+                caption_style=caption_style,
+                caption_settings=caption_settings,
+                editing_settings=editing_settings,
             )
 
-            reference = validate_reference_url(
-                reference_url
-            )
-
-            github_token = get_github_token()
+            # ------------------------------------------------
+            # SEND TO GITHUB
+            # ------------------------------------------------
 
             with st.spinner(
-                "Creating GitHub video job..."
+                "🚀 Sending job to V2 worker..."
             ):
-                job = create_orchestrator_job(
-                    job_type="video",
-                    input_value=video_url,
-                    reference_url=reference,
-                )
 
-                job_path = create_github_job(
+                github_result = create_github_job(
                     token=github_token,
-                    job=job,
+                    job=job.to_dict(),
                 )
 
-            clear_job_cache()
+            # ------------------------------------------------
+            # SUCCESS
+            # ------------------------------------------------
 
             st.success(
-                "✅ Video job added to GitHub queue."
-            )
-
-            metric1, metric2 = st.columns(2)
-
-            with metric1:
-                st.metric(
-                    "Job ID",
-                    job["job_id"],
-                )
-
-            with metric2:
-                st.metric(
-                    "Status",
-                    "QUEUED",
-                )
-
-            st.write(
-                "Queue Path"
-            )
-
-            st.code(
-                job_path
-            )
-
-            st.info(
-                "Termux worker will pick up this queued job."
+                "✅ Pro V2 job successfully queued."
             )
 
             st.markdown(
-                "### Next"
+                f"""
+                <div class="status-card">
+                    <div class="status-left">
+                        <div class="status-dot"></div>
+                        <div>
+                            <div class="status-text">
+                                Worker Queue
+                            </div>
+                            <div class="status-small">
+                                Job {job_id}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="status-small">
+                        QUEUED
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-            st.write(
-                "Run the ONE-JOB worker in Termux. "
-                "After processing, return here and refresh Jobs."
+            st.code(
+                job_id,
+                language="text",
             )
 
-        except Exception as exc:
-            st.error(
-                "❌ Failed to create video job."
-            )
+            if github_result:
 
-            st.exception(
-                exc
-            )
-
-    # ========================================================
-    # TOPIC WORKFLOW
-    # ========================================================
-
-    else:
-        try:
-            clean_reference = (
-                reference_url.strip()
-                if reference_url.strip()
-                else None
-            )
-
-            with st.spinner(
-                "🔎 Researching topic, analyzing sources "
-                "and generating production plan..."
-            ):
-                result = execute_topic_job(
-                    topic=input_value.strip(),
-                    reference_url=clean_reference,
-                    research_limit=int(
-                        research_limit
-                    ),
+                st.caption(
+                    f"📦 GitHub job created: `{github_result}`"
                 )
 
-            render_topic_result(
-                result
-            )
-
-        except Exception as exc:
-            st.error(
-                "❌ Research / analysis failed."
-            )
-
-            st.exception(
-                exc
-            )
-
-
-# ============================================================
-# JOB QUEUE
-# ============================================================
-
-st.divider()
-
-st.subheader(
-    "📋 Recent Jobs"
-)
-
-queue_col1, queue_col2 = st.columns(
-    [1, 4]
-)
-
-with queue_col1:
-    refresh_jobs = st.button(
-        "🔄 Refresh Jobs",
-        use_container_width=True,
-    )
-
-with queue_col2:
-    st.caption(
-        "Refresh after the Termux worker finishes a job."
-    )
-
-
-# ============================================================
-# LOAD JOBS
-# ============================================================
-
-if refresh_jobs:
-    clear_job_cache()
-
-
-try:
-    if not github_ready:
-        st.warning(
-            "GitHub jobs cannot be loaded until GITHUB_TOKEN "
-            "is configured in Streamlit secrets."
-        )
-
-    else:
-        jobs = get_github_jobs(
-            github_token
-        )
-
-        if not jobs:
             st.info(
-                "No jobs found."
+                "Worker will automatically detect the queued job "
+                "and continue the existing download → processing → "
+                "phone-save pipeline."
             )
 
-        else:
-            # ------------------------------------------------
-            # Queue metrics
-            # ------------------------------------------------
+        except Exception as exc:
 
-            queued_count = sum(
-                1
-                for job in jobs
-                if normalize_status(
-                    job.get("status")
-                )
-                == "queued"
+            st.error(
+                f"❌ Job creation failed: {exc}"
             )
 
-            processing_count = sum(
-                1
-                for job in jobs
-                if normalize_status(
-                    job.get("status")
-                )
-                in {
-                    "downloading",
-                    "processing",
-                }
-            )
 
-            completed_count = sum(
-                1
-                for job in jobs
-                if normalize_status(
-                    job.get("status")
-                )
-                == "completed"
-            )
+# ============================================================
+# LIVE CONFIGURATION PREVIEW
+# ============================================================
 
-            failed_count = sum(
-                1
-                for job in jobs
-                if normalize_status(
-                    job.get("status")
-                )
-                == "failed"
-            )
+st.markdown(
+    '<div class="section-label">⚙️ CURRENT CONFIGURATION</div>',
+    unsafe_allow_html=True,
+)
 
-            m1, m2, m3, m4 = st.columns(4)
+col1, col2, col3, col4 = st.columns(4)
 
-            with m1:
-                st.metric(
-                    "Queued",
-                    queued_count,
-                )
+with col1:
 
-            with m2:
-                st.metric(
-                    "Processing",
-                    processing_count,
-                )
-
-            with m3:
-                st.metric(
-                    "Completed",
-                    completed_count,
-                )
-
-            with m4:
-                st.metric(
-                    "Failed",
-                    failed_count,
-                )
-
-            st.divider()
-
-            # ------------------------------------------------
-            # Job selector
-            # ------------------------------------------------
-
-            job_labels = []
-
-            for job in jobs[:25]:
-                job_id = safe_text(
-                    job.get("job_id")
-                ) or "Unknown"
-
-                status = safe_text(
-                    job.get("status")
-                ) or "unknown"
-
-                job_labels.append(
-                    f"{status_emoji(status)} {job_id} • "
-                    f"{status.upper()}"
-                )
-
-            selected_label = st.selectbox(
-                "Select Job",
-                job_labels,
-                key="selected_job",
-            )
-
-            selected_index = job_labels.index(
-                selected_label
-            )
-
-            selected_job = jobs[
-                selected_index
-            ]
-
-            # ------------------------------------------------
-            # Selected job
-            # ------------------------------------------------
-
-            render_job_card(
-                selected_job,
-                show_output=(
-                    normalize_status(
-                        selected_job.get("status")
-                    )
-                    == "completed"
-                ),
-            )
-
-            # ------------------------------------------------
-            # Other recent jobs
-            # ------------------------------------------------
-
-            remaining_jobs = [
-                job
-                for job in jobs[:10]
-                if job is not selected_job
-            ]
-
-            if remaining_jobs:
-                st.divider()
-
-                with st.expander(
-                    "📜 Other Recent Jobs"
-                ):
-                    for job in remaining_jobs:
-                        render_job_card(
-                            job,
-                            show_output=False,
-                        )
-
-
-except Exception as exc:
-    st.error(
-        "❌ Could not load GitHub jobs."
+    st.markdown(
+        f"""
+        <div class="glass-card">
+            <div style="font-size:12px;color:#777f96;">
+                DURATION
+            </div>
+            <div style="
+                font-size:25px;
+                font-weight:800;
+                color:#f4f6ff;
+                margin-top:5px;
+            ">
+                {duration}s
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.exception(
-        exc
+
+with col2:
+
+    st.markdown(
+        f"""
+        <div class="glass-card">
+            <div style="font-size:12px;color:#777f96;">
+                CAPTION
+            </div>
+            <div style="
+                font-size:18px;
+                font-weight:750;
+                color:#f4f6ff;
+                margin-top:8px;
+            ">
+                {caption_style}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+with col3:
+
+    zoom_status = "ON" if dynamic_zoom else "OFF"
+
+    st.markdown(
+        f"""
+        <div class="glass-card">
+            <div style="font-size:12px;color:#777f96;">
+                DYNAMIC ZOOM
+            </div>
+            <div style="
+                font-size:25px;
+                font-weight:800;
+                color:#f4f6ff;
+                margin-top:5px;
+            ">
+                {zoom_status}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+with col4:
+
+    research_status = "ON" if research_enabled else "OFF"
+
+    st.markdown(
+        f"""
+        <div class="glass-card">
+            <div style="font-size:12px;color:#777f96;">
+                RESEARCH
+            </div>
+            <div style="
+                font-size:25px;
+                font-weight:800;
+                color:#f4f6ff;
+                margin-top:5px;
+            ">
+                {research_status}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
 # ============================================================
-# CURRENT CAPTION SELECTION
+# PIPELINE PREVIEW
 # ============================================================
 
-if (
-    "selected_caption_style_name"
-    in st.session_state
+st.markdown(
+    '<div class="section-label">🧠 V2 PIPELINE</div>',
+    unsafe_allow_html=True,
+)
+
+pipeline_cols = st.columns(6)
+
+pipeline_steps = [
+    ("01", "Research"),
+    ("02", "Analyze"),
+    ("03", "Transcribe"),
+    ("04", "Story"),
+    ("05", "Edit"),
+    ("06", "Export"),
+]
+
+for col, (number, title) in zip(
+    pipeline_cols,
+    pipeline_steps,
 ):
-    st.divider()
 
-    st.subheader(
-        "🎨 Current Caption Selection"
-    )
+    with col:
 
-    selected_name = st.session_state[
-        "selected_caption_style_name"
-    ]
+        st.markdown(
+            f"""
+            <div style="
+                padding:18px 12px;
+                text-align:center;
+                border-radius:15px;
+                background:rgba(255,255,255,0.025);
+                border:1px solid rgba(255,255,255,0.06);
+            ">
+                <div style="
+                    font-size:11px;
+                    color:#6f7890;
+                    margin-bottom:6px;
+                ">
+                    {number}
+                </div>
 
-    selected_style = st.session_state.get(
-        "selected_caption_style",
-        "",
-    )
-
-    st.success(
-        f"Selected: {selected_name}"
-    )
-
-    st.caption(
-        f"Render style: `{selected_style}`"
-    )
-
-
-# ============================================================
-# ARCHITECTURE STATUS
-# ============================================================
-
-st.divider()
-
-with st.expander(
-    "🏗️ V2 Pipeline Status",
-    expanded=False,
-):
-    pipeline_rows = [
-        ("Input / URL Validation", "READY"),
-        ("GitHub Job Queue", "READY"),
-        ("Termux Downloader", "WORKING"),
-        ("Whisper Transcription", "WORKING"),
-        ("Clip Analysis", "WORKING"),
-        ("FFmpeg Clip Processing", "WORKING"),
-        ("Vertical 9:16 Output", "WORKING"),
-        ("Research Engine", "READY"),
-        ("Source Analysis", "READY"),
-        ("Script Planning", "READY"),
-        ("Caption Presets UI", "READY"),
-        ("Final Caption Render", "NEXT"),
-        ("Remote Artifact Sync", "NEXT"),
-        ("Gallery Download", "NEXT"),
-    ]
-
-    for component, status in pipeline_rows:
-        col1, col2 = st.columns(
-            [4, 1]
+                <div style="
+                    font-size:13px;
+                    font-weight:700;
+                    color:#dfe3f1;
+                ">
+                    {title}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-
-        with col1:
-            st.write(
-                component
-            )
-
-        with col2:
-            if status in {
-                "READY",
-                "WORKING",
-            }:
-                st.success(
-                    status
-                )
-            else:
-                st.info(
-                    status
-                )
 
 
 # ============================================================
 # FOOTER
 # ============================================================
 
-st.divider()
-
-st.caption(
-    "Auto Faceless Video Creator V2 • "
-    "Input → Validation → GitHub Queue → "
-    "Termux → Download → Whisper → Clip Analysis → "
-    "FFmpeg → Vertical Clips → Captions → Final Render"
+st.markdown(
+    """
+    <div class="footer">
+        Auto Faceless Video Creator • Pro V2
+        <br>
+        GitHub Queue • Termux Worker • Automated Video Pipeline
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
