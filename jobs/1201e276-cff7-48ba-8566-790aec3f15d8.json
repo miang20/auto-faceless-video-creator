@@ -32,8 +32,8 @@
     "dynamic_zoom": true,
     "remove_silence": true
   },
-  "status": "running",
-  "result_path": null,
+  "status": "completed",
+  "result_path": "/data/data/com.termux/files/home/v2-test/output/jobs/FINAL_V2_SHORT.mp4",
   "error": null,
   "created_at": "2026-10-07T09:15:46.686198+00:00"
 }
