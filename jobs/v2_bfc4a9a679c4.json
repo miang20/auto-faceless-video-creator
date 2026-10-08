@@ -1,6 +1,6 @@
 {
   "job_id": "v2_bfc4a9a679c4",
-  "status": "running",
+  "status": "failed",
   "pipeline": "video",
   "pipeline_version": "2.0",
   "input_value": "https://youtube.com/shorts/V8htjOf9gAc?si=07zvEH59zSykYnP6",
@@ -18,5 +18,6 @@
     "contextual_broll": false,
     "reaction_selection": true,
     "visual_change_rhythm": true
-  }
+  },
+  "error": "No input video or timeline clips supplied"
 }
