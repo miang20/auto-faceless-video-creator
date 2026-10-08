@@ -1,6 +1,6 @@
 {
   "job_id": "v2_851a7eccb09b",
-  "status": "failed",
+  "status": "running",
   "pipeline": "video",
   "pipeline_version": "2.0",
   "input_value": "https://youtube.com/shorts/vA86KMF2jVw?si=IZPsKJgrzCzdS2SG",
@@ -19,6 +19,5 @@
     "reaction_selection": true,
     "visual_change_rhythm": true
   },
-  "updated_at": "2026-10-08T15:09:18Z",
-  "error": "DownloadError: ERROR: unable to download video data: HTTP Error 403: Forbidden"
+  "updated_at": "2026-10-08T15:09:36Z"
 }
