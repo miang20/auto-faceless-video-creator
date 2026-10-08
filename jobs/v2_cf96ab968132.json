@@ -1,6 +1,6 @@
 {
   "job_id": "v2_cf96ab968132",
-  "status": "queued",
+  "status": "running",
   "pipeline": "video",
   "pipeline_version": "2.0",
   "input_value": "https://youtube.com/shorts/0s9tdW5IJqA?si=Lm3q4KMrrE99OsVT",
