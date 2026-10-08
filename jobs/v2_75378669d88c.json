@@ -1,6 +1,6 @@
 {
   "job_id": "v2_75378669d88c",
-  "status": "queued",
+  "status": "running",
   "pipeline": "video",
   "pipeline_version": "2.0",
   "input_value": "https://youtube.com/shorts/vA86KMF2jVw?si=rkgIzf4pkMjWBDiW",
@@ -18,5 +18,6 @@
     "contextual_broll": true,
     "reaction_selection": true,
     "visual_change_rhythm": true
-  }
+  },
+  "updated_at": "2026-10-08T14:27:23Z"
 }
