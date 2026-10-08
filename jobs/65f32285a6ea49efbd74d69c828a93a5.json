@@ -1,9 +1,0 @@
-{
-  "job_id": "65f32285a6ea49efbd74d69c828a93a5",
-  "job_type": "download",
-  "input_value": "https://youtube.com/shorts/5cV9VjCtJSI?is=MXCOCxpP1MODla61",
-  "status": "failed",
-  "result_path": null,
-  "error": "Object of type PosixPath is not JSON serializable",
-  "created_at": "2026-10-06T14:11:47.420449+00:00"
-}
