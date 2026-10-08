@@ -1,6 +1,6 @@
 {
   "job_id": "v2_90bfeb59834d",
-  "status": "failed",
+  "status": "running",
   "pipeline": "video",
   "pipeline_version": "2.0",
   "input_value": "https://youtube.com/shorts/1xOa6LZcPUs?si=VdPlpHfZSMI0MXwN",
@@ -19,6 +19,5 @@
     "reaction_selection": true,
     "visual_change_rhythm": true
   },
-  "updated_at": "2026-10-08T16:11:30Z",
-  "error": "RuntimeError: FFmpeg/command failed.\n\nCOMMAND:\nffmpeg -y -hide_banner -loglevel error -ss 0.000 -i /data/data/com.termux/files/home/v2-test/repo/downloads/1xOa6LZcPUs.mp4 -t 45.360 -vf scale=iw*max(1080/iw\\,1920/ih):ih*max(1080/iw\\,1920/ih),crop=1080:1920,scale=1080:1920,drawtext:fontfile='/system/fonts/Roboto-Regular.ttf':text='*Music* *Music* *Music*':expansion=none:fontsize=54:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:borderw=3:bordercolor=black:shadowx=2:shadowy=2:shadowcolor=black@0.65 -r 30 -an -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -movflags +faststart /data/data/com.termux/files/home/v2-test/output/jobs/.v2_render_final_1xOa6LZcPUs/segment_000.mp4\n\nSTDOUT:\n\n\nSTDERR:\n[AVFilterGraph @ 0xb400007dbfbfacc0] No option name near '/system/fonts/Roboto-Regular.ttf:text=*Music* *Music* *Music*:expansion=none:fontsize=54:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:borderw=3:bordercolor=black:shadowx=2:shadowy=2:shadowcolor=black@0.65'\n[AVFilterGraph @ 0xb400007dbfbfacc0] Error parsing a filter description around: \n[AVFilterGraph @ 0xb400007dbfbfacc0] Error parsing filterchain 'scale=iw*max(1080/iw\\,1920/ih):ih*max(1080/iw\\,1920/ih),crop=1080:1920,scale=1080:1920,drawtext:fontfile='/system/fonts/Roboto-Regular.ttf':text='*Music* *Music* *Music*':expansion=none:fontsize=54:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:borderw=3:bordercolor=black:shadowx=2:shadowy=2:shadowcolor=black@0.65' around: \nError opening output file /data/data/com.termux/files/home/v2-test/output/jobs/.v2_render_final_1xOa6LZcPUs/segment_000.mp4.\nError opening output files: Invalid argument\n"
+  "updated_at": "2026-10-08T16:11:48Z"
 }
