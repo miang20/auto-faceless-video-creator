@@ -1,11 +1,12 @@
 {
   "job_id": "331b1bf1963a4bce80f473551da43238",
-  "status": "running",
+  "status": "failed",
   "job_type": "youtube",
   "input_value": "https://youtube.com/shorts/0s9tdW5IJqA?si=-nJLr3sFYLsrpdTU",
   "reference_url": "https://youtube.com/shorts/0s9tdW5IJqA?si=-nJLr3sFYLsrpdTU",
   "duration": 15,
   "caption_style": "Bold Viral",
   "caption_settings": {},
-  "editing_settings": {}
+  "editing_settings": {},
+  "error": "cannot import name 'build_visual_editing_plan' from 'core.script_generator' (/data/data/com.termux/files/home/v2-test/repo/core/script_generator.py)"
 }
