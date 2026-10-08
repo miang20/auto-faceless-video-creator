@@ -1,9 +1,0 @@
-{
-  "job_id": "1b7fc484375348d682a0292a057d1a4d",
-  "job_type": "video",
-  "input_value": "https://youtube.com/shorts/AYSlkEtq3Us?is=a0x-Gp4av7ZzuvBV",
-  "reference_url": null,
-  "status": "completed",
-  "result_path": "output/jobs/1b7fc484375348d682a0292a057d1a4d_result.json",
-  "created_at": "2026-10-07T01:52:10.103327+00:00"
-}
