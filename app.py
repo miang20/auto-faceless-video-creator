@@ -1,363 +1,706 @@
-import urllib.request
+import base64
 import json
-
-import streamlit as st
+import os
+import shutil
+import subprocess
 import uuid
+from pathlib import Path
 
-from core.config import (
-    GITHUB_OWNER,
-    GITHUB_REPO,
-    DEFAULT_RESEARCH_LIMIT,
-    DEFAULT_MAX_CLIPS,
-    DEFAULT_LANGUAGE,
-    DEFAULT_MAKE_VERTICAL,
-    DEFAULT_KEEP_AUDIO,
-)
+import requests
+import streamlit as st
 
-from core.github_jobs import create_github_job
-from core.jobs import create_job
-from core.validator import validate_video_url, validate_reference_url
 
+# ============================================================
+# CONFIG
+# ============================================================
+
+REPO = "miang20/auto-faceless-video-creator"
+BASE = Path.home() / "v2-test"
+JOBS_DIR = BASE / "jobs"
+
+PHONE_MOVIES = Path.home() / "storage" / "shared" / "Movies" / "AutoFaceless"
+PHONE_DCIM = Path.home() / "storage" / "shared" / "DCIM" / "AutoFaceless"
+
+
+# ============================================================
+# PAGE
+# ============================================================
 
 st.set_page_config(
-    page_title="Auto Faceless Video Creator",
+    page_title="Auto Faceless Studio V2",
     page_icon="🎬",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 
-def get_github_token():
-    token = st.secrets.get("GITHUB_TOKEN")
+# ============================================================
+# PREMIUM UI
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+    .block-container {
+        max-width: 1400px;
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+    }
+
+    .hero {
+        padding: 24px;
+        border-radius: 18px;
+        background: linear-gradient(
+            135deg,
+            rgba(90,70,180,.25),
+            rgba(20,120,180,.15)
+        );
+        border: 1px solid rgba(255,255,255,.10);
+        margin-bottom: 24px;
+    }
+
+    .hero h1 {
+        margin: 0;
+        font-size: 2.3rem;
+    }
+
+    .hero p {
+        margin: 8px 0 0 0;
+        opacity: .75;
+    }
+
+    .status-card {
+        padding: 16px;
+        border-radius: 14px;
+        border: 1px solid rgba(255,255,255,.10);
+        background: rgba(255,255,255,.035);
+        margin-bottom: 12px;
+    }
+
+    .small {
+        opacity: .65;
+        font-size: .85rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# GITHUB
+# ============================================================
+
+def load_github_token():
+    env_path = (
+        Path.home().parent
+        / "usr"
+        / "var"
+        / "service"
+        / "af-v2-worker"
+        / "env"
+        / "GITHUB_TOKEN"
+    )
+
+    if env_path.exists():
+        token = env_path.read_text().strip()
+        if token:
+            return token
+
+    return os.environ.get("GITHUB_TOKEN")
+
+
+def github_headers():
+    token = load_github_token()
 
     if not token:
-        raise RuntimeError(
-            "GITHUB_TOKEN is missing from Streamlit secrets."
-        )
+        raise RuntimeError("GITHUB_TOKEN not found.")
 
-    return token
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
 
 
-def get_github_jobs(token):
+def github_jobs():
+    url = f"https://api.github.com/repos/{REPO}/contents/jobs"
+
+    r = requests.get(
+        url,
+        headers=github_headers(),
+        timeout=30,
+    )
+    r.raise_for_status()
+
+    jobs = []
+
+    for item in r.json():
+        if not item.get("name", "").endswith(".json"):
+            continue
+
+        try:
+            jr = requests.get(
+                item["download_url"],
+                timeout=30,
+            )
+            jr.raise_for_status()
+            job = jr.json()
+
+            if "job_id" in job:
+                jobs.append(job)
+
+        except Exception:
+            continue
+
+    jobs.sort(
+        key=lambda x: x.get("job_id", ""),
+        reverse=True,
+    )
+
+    return jobs
+
+
+def create_v2_job(
+    input_value,
+    duration,
+    max_clips,
+    caption_style,
+    caption_settings,
+    editing_settings,
+):
+    job_id = f"v2_{uuid.uuid4().hex[:12]}"
+
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "pipeline": "video",
+        "pipeline_version": "2.0",
+        "input_value": input_value,
+        "reference_url": input_value,
+        "duration": int(duration),
+        "max_clips": int(max_clips),
+        "caption_style": caption_style,
+        "caption_settings": caption_settings,
+        "editing_settings": editing_settings,
+    }
+
+    JOBS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    local_path = JOBS_DIR / f"{job_id}.json"
+
+    local_path.write_text(
+        json.dumps(
+            job,
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
     url = (
         f"https://api.github.com/repos/"
-        f"{GITHUB_OWNER}/{GITHUB_REPO}/contents/jobs"
+        f"{REPO}/contents/jobs/{job_id}.json"
     )
 
-    request = urllib.request.Request(
+    content = base64.b64encode(
+        json.dumps(
+            job,
+            indent=2,
+            ensure_ascii=False,
+        ).encode()
+    ).decode()
+
+    payload = {
+        "message": f"queue V2 job {job_id}",
+        "content": content,
+    }
+
+    response = requests.put(
         url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
+        headers=github_headers(),
+        json=payload,
+        timeout=30,
     )
 
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            items = json.loads(
-                response.read().decode("utf-8")
+    response.raise_for_status()
+
+    return job_id, local_path
+
+
+# ============================================================
+# PHONE / PHOTOS
+# ============================================================
+
+def import_to_photos(video_path):
+    """
+    Copies the final video into Android shared storage and
+    asks Android media scanner to index it for Google Photos.
+    """
+
+    source = Path(video_path)
+
+    if not source.exists():
+        raise FileNotFoundError(source)
+
+    PHONE_MOVIES.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    PHONE_DCIM.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    movie_target = PHONE_MOVIES / source.name
+    dcim_target = PHONE_DCIM / source.name
+
+    shutil.copy2(
+        source,
+        movie_target,
+    )
+
+    shutil.copy2(
+        source,
+        dcim_target,
+    )
+
+    scan_targets = [
+        str(movie_target),
+        str(dcim_target),
+    ]
+
+    for target in scan_targets:
+        try:
+            subprocess.run(
+                ["termux-media-scan", target],
+                timeout=15,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
+        except Exception:
+            pass
 
-        jobs = []
-
-        for item in items:
-            if not item.get("name", "").endswith(".json"):
-                continue
-
-            download_url = item.get("download_url")
-
-            if not download_url:
-                continue
-
-            try:
-                with urllib.request.urlopen(
-                    download_url,
-                    timeout=15,
-                ) as response:
-                    jobs.append(
-                        json.loads(
-                            response.read().decode("utf-8")
-                        )
-                    )
-            except Exception:
-                continue
-
-        jobs.sort(
-            key=lambda x: x.get("created_at", ""),
-            reverse=True,
-        )
-
-        return jobs
-
-    except Exception:
-        return []
+    return dcim_target
 
 
-st.title("🎬 Auto Faceless Video Creator")
+# ============================================================
+# FIND COMPLETED VIDEOS
+# ============================================================
 
-st.caption(
-    "Pro V2 Control Center • Research • Story • Dynamic Editing • 9:16"
+def completed_videos():
+    paths = []
+
+    search_dirs = [
+        PHONE_MOVIES,
+        PHONE_DCIM,
+        BASE / "output" / "jobs",
+        BASE / "repo" / "output",
+    ]
+
+    seen = set()
+
+    for directory in search_dirs:
+        if not directory.exists():
+            continue
+
+        for pattern in ("*.mp4", "*.MP4"):
+            for path in directory.rglob(pattern):
+                try:
+                    resolved = str(path.resolve())
+
+                    if resolved in seen:
+                        continue
+
+                    if path.stat().st_size <= 0:
+                        continue
+
+                    seen.add(resolved)
+                    paths.append(path)
+
+                except Exception:
+                    pass
+
+    paths.sort(
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    return paths
+
+
+# ============================================================
+# HERO
+# ============================================================
+
+st.markdown(
+    """
+    <div class="hero">
+        <h1>🎬 Auto Faceless Studio V2</h1>
+        <p>
+            AI-assisted clip intelligence → editing → captions →
+            final vertical video
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-st.divider()
 
-st.subheader("🟢 System Status")
+# ============================================================
+# SIDEBAR
+# ============================================================
 
-c1, c2, c3, c4 = st.columns(4)
+with st.sidebar:
+    st.header("⚡ V2 Control")
 
-with c1:
-    st.success("GitHub Connected")
+    if st.button(
+        "🔄 Refresh Dashboard",
+        use_container_width=True,
+    ):
+        st.rerun()
 
-with c2:
-    st.success("Job Queue Ready")
+    st.divider()
 
-with c3:
-    st.success("V2 Pipeline Ready")
+    st.caption("V2 Pipeline")
+    st.code(
+        "YouTube\n"
+        "↓\n"
+        "GitHub Job\n"
+        "↓\n"
+        "Worker\n"
+        "↓\n"
+        "Downloader\n"
+        "↓\n"
+        "Analysis\n"
+        "↓\n"
+        "Clip Intelligence\n"
+        "↓\n"
+        "Video Processing\n"
+        "↓\n"
+        "Final MP4",
+        language="text",
+    )
 
-with c4:
-    st.success("Termux Worker Ready")
 
-st.divider()
+# ============================================================
+# CREATE JOB
+# ============================================================
 
-st.subheader("🚀 Create New Video")
+st.header("🚀 Create V2 Video")
 
-input_value = st.text_input(
-    "YouTube Video URL",
+source_value = st.text_input(
+    "YouTube URL",
     placeholder="https://www.youtube.com/watch?v=...",
 )
 
-reference_url = st.text_input(
-    "Reference URL (Optional)",
-    placeholder="Optional YouTube reference...",
-)
+col1, col2, col3 = st.columns(3)
 
-st.subheader("⚙️ V2 Settings")
-
-c1, c2, c3 = st.columns(3)
-
-with c1:
-    duration = st.selectbox(
-        "Video Duration",
-        [10, 15, 20, 30, 45, 60],
-        index=3,
-        format_func=lambda x: f"{x} seconds",
+with col1:
+    duration = st.number_input(
+        "Output Duration",
+        min_value=10,
+        max_value=180,
+        value=30,
+        step=5,
+        help="Target duration of the final video.",
     )
 
-with c2:
+with col2:
+    max_clips = st.number_input(
+        "Max Clips",
+        min_value=1,
+        max_value=20,
+        value=10,
+        step=1,
+    )
+
+with col3:
     caption_style = st.selectbox(
         "Caption Style",
         [
             "Bold Viral",
-            "Karaoke",
             "Clean",
-            "Impact",
-            "Minimal Bottom",
+            "Minimal",
         ],
     )
 
-with c3:
-    max_clips = st.number_input(
-        "Maximum Clips",
-        min_value=1,
-        max_value=100,
-        value=DEFAULT_MAX_CLIPS,
-        step=1,
-    )
 
-c1, c2, c3 = st.columns(3)
+# ============================================================
+# CAPTIONS
+# ============================================================
 
-with c1:
-    language = st.selectbox(
-        "Language",
-        ["en"],
-        index=0,
-    )
+with st.expander("📝 Caption Settings", expanded=True):
 
-with c2:
-    make_vertical = st.checkbox(
-        "9:16 Vertical",
-        value=DEFAULT_MAKE_VERTICAL,
-    )
-
-with c3:
-    keep_audio = st.checkbox(
-        "Keep Audio Files",
-        value=DEFAULT_KEEP_AUDIO,
-    )
-
-with st.expander("🎨 Caption Controls"):
-
-    caption_size = st.slider(
-        "Caption Size",
-        20,
-        120,
-        60,
-    )
-
-    words_per_line = st.slider(
-        "Words Per Line",
-        1,
-        8,
-        4,
-    )
-
-    keyword_emphasis = st.checkbox(
-        "Keyword Emphasis",
+    caption_enabled = st.checkbox(
+        "Enable Captions",
         value=True,
     )
 
     caption_settings = {
-        "font_size": caption_size,
-        "words_per_line": words_per_line,
-        "keyword_emphasis": keyword_emphasis,
+        "enabled": caption_enabled,
     }
 
-with st.expander("🎬 Editing Controls"):
 
-    dynamic_zoom = st.checkbox(
-        "Dynamic Zoom / Punch In",
-        value=True,
-    )
+# ============================================================
+# EDITING
+# ============================================================
 
-    remove_silence = st.checkbox(
-        "Remove Dead Space",
-        value=True,
-    )
+with st.expander("🎞️ Editing Settings", expanded=True):
 
-    normalize_audio = st.checkbox(
-        "Normalize Audio",
-        value=True,
-    )
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        dynamic_zoom = st.checkbox(
+            "Dynamic Zoom",
+            value=True,
+        )
+
+        remove_silence = st.checkbox(
+            "Remove Silence",
+            value=True,
+        )
+
+    with c2:
+        normalize_audio = st.checkbox(
+            "Normalize Audio",
+            value=True,
+        )
+
+        reaction_selection = st.checkbox(
+            "Reaction / Payoff Selection",
+            value=True,
+        )
+
+    with c3:
+        contextual_broll = st.checkbox(
+            "Contextual B-roll",
+            value=False,
+        )
+
+        visual_change_rhythm = st.checkbox(
+            "Visual Change Rhythm",
+            value=True,
+        )
 
     editing_settings = {
         "dynamic_zoom": dynamic_zoom,
         "remove_silence": remove_silence,
         "normalize_audio": normalize_audio,
+        "contextual_broll": contextual_broll,
+        "reaction_selection": reaction_selection,
+        "visual_change_rhythm": visual_change_rhythm,
     }
 
 
+# ============================================================
+# QUEUE
+# ============================================================
+
 if st.button(
-    "🚀 CREATE V2 VIDEO",
+    "🚀 CREATE V2 JOB",
     type="primary",
     use_container_width=True,
 ):
 
-    if not input_value.strip():
-        st.warning("Please enter a YouTube video URL.")
-        st.stop()
+    if not source_value.strip():
+        st.error("YouTube URL required.")
+    else:
+        try:
+            with st.spinner("Creating V2 job..."):
 
-    try:
-        video_url = validate_video_url(
-            input_value.strip()
-        )
-
-        reference = validate_reference_url(
-            reference_url.strip()
-            if reference_url.strip()
-            else None
-        )
-
-        token = get_github_token()
-
-        job = create_job(
-            job_id=str(uuid.uuid4()),
-            job_type="video",
-            input_value=video_url,
-            reference_url=reference,
-            duration=int(duration),
-            caption_style=caption_style,
-            caption_settings=caption_settings,
-            editing_settings=editing_settings,
-        )
-
-        with st.spinner(
-            "Adding V2 job to GitHub queue..."
-        ):
-            job_data = job.to_dict() if hasattr(job, "to_dict") else job
-            job_path = create_github_job(
-                token=token,
-                job=job_data,
-            )
-
-        st.success(
-            "✅ V2 video job successfully queued."
-        )
-
-        st.code(
-            job.job_id
-            if hasattr(job, "job_id")
-            else job.get("job_id")
-        )
-
-        st.info(
-            "Termux worker will download the source, "
-            "run the V2 pipeline, and save the final video."
-        )
-
-    except Exception as exc:
-        st.error(
-            "❌ Failed to create V2 job."
-        )
-        st.exception(exc)
-
-
-st.divider()
-
-st.subheader("📋 Recent Jobs")
-
-if st.button(
-    "🔄 Refresh Jobs",
-    use_container_width=True,
-):
-
-    try:
-        token = get_github_token()
-        jobs = get_github_jobs(token)
-
-        if not jobs:
-            st.info("No jobs found.")
-        else:
-
-            for job in jobs[:10]:
-
-                status = (
-                    job.get("status", "unknown")
-                    .upper()
+                job_id, local_path = create_v2_job(
+                    input_value=source_value.strip(),
+                    duration=duration,
+                    max_clips=max_clips,
+                    caption_style=caption_style,
+                    caption_settings=caption_settings,
+                    editing_settings=editing_settings,
                 )
 
-                with st.container(border=True):
+            st.success("✅ V2 job queued.")
 
-                    st.write(
-                        f"**{job.get('job_id', 'Unknown')}**"
+            st.code(
+                job_id,
+                language="text",
+            )
+
+            st.info(
+                "Worker will automatically pick this job."
+            )
+
+        except Exception as error:
+            st.error(
+                f"Failed to create V2 job: {error}"
+            )
+
+
+# ============================================================
+# JOB MONITOR
+# ============================================================
+
+st.divider()
+st.header("📊 V2 Jobs")
+
+try:
+    jobs = github_jobs()
+
+    if not jobs:
+        st.info("No V2 jobs found.")
+
+    else:
+        # V2 LATEST-ONLY UI: show only the newest job
+        job = jobs[0]
+        for job in [job]:
+
+            status = str(
+                job.get("status", "unknown")
+            ).lower()
+
+            job_id = job.get(
+                "job_id",
+                "unknown",
+            )
+
+            if status == "completed":
+                icon = "✅"
+            elif status == "running":
+                icon = "🟡"
+            elif status == "failed":
+                icon = "❌"
+            elif status == "queued":
+                icon = "⏳"
+            else:
+                icon = "⚪"
+
+            with st.container(border=True):
+
+                left, right = st.columns(
+                    [4, 1]
+                )
+
+                with left:
+                    st.markdown(
+                        f"### {icon} `{job_id}`"
                     )
 
-                    if status == "COMPLETED":
-                        st.success(status)
+                    st.caption(
+                        f"Status: **{status.upper()}**"
+                    )
 
-                    elif status == "FAILED":
-                        st.error(status)
+                    source = job.get(
+                        "input_value",
+                        "",
+                    )
 
-                    elif status in {
-                        "RUNNING",
-                        "DOWNLOADING",
-                        "PROCESSING",
-                    }:
-                        st.warning(status)
-
-                    else:
-                        st.info(status)
-
-                    if job.get("result_path"):
-                        st.code(
-                            str(job["result_path"])
-                        )
+                    if source:
+                        st.caption(source)
 
                     if job.get("error"):
                         st.error(
-                            str(job["error"])
+                            job["error"]
                         )
 
-    except Exception as exc:
-        st.error(
-            f"Could not load jobs: {exc}"
+                with right:
+                    st.metric(
+                        "Duration",
+                        f'{job.get("duration", 0)}s',
+                    )
+
+
+except Exception as error:
+    st.warning(
+        f"Could not load GitHub jobs: {error}"
+    )
+
+
+# ============================================================
+# FINAL VIDEOS
+# ============================================================
+
+st.divider()
+st.header("🎥 Final Videos")
+
+videos = completed_videos()
+
+if not videos:
+    st.info(
+        "No completed videos yet. "
+        "When V2 finishes, the final MP4 will appear here."
+    )
+
+else:
+
+    for video in videos[:10]:
+
+        st.markdown(
+            f"**{video.name}**"
         )
+
+        try:
+            size_mb = video.stat().st_size / (
+                1024 * 1024
+            )
+
+            st.caption(
+                f"{size_mb:.1f} MB • {video.parent}"
+            )
+
+            with open(video, "rb") as file:
+                video_bytes = file.read()
+
+            st.video(
+                video_bytes
+            )
+
+            st.download_button(
+                label="⬇️ DOWNLOAD VIDEO",
+                data=video_bytes,
+                file_name=video.name,
+                mime="video/mp4",
+                use_container_width=True,
+                key=f"download_{video}",
+            )
+
+            if st.button(
+                "📱 Send to Google Photos / Android Media",
+                key=f"photos_{video}",
+                use_container_width=True,
+            ):
+                try:
+                    target = import_to_photos(video)
+
+                    st.success(
+                        f"Saved to Android DCIM: {target.name}"
+                    )
+
+                    st.info(
+                        "Google Photos ko media scan request bhej di gayi hai."
+                    )
+
+                except Exception as error:
+                    st.error(
+                        f"Phone media copy failed: {error}"
+                    )
+
+        except Exception as error:
+            st.error(
+                f"Could not load {video.name}: {error}"
+            )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "Auto Faceless Studio V2 • "
+    "Worker-based GitHub pipeline • "
+    "Vertical video output"
+)
