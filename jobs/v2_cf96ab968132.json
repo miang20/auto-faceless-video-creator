@@ -1,0 +1,22 @@
+{
+  "job_id": "v2_cf96ab968132",
+  "status": "queued",
+  "pipeline": "video",
+  "pipeline_version": "2.0",
+  "input_value": "https://youtube.com/shorts/0s9tdW5IJqA?si=Lm3q4KMrrE99OsVT",
+  "reference_url": "https://youtube.com/shorts/0s9tdW5IJqA?si=Lm3q4KMrrE99OsVT",
+  "duration": 30,
+  "max_clips": 10,
+  "caption_style": "Bold Viral",
+  "caption_settings": {
+    "enabled": true
+  },
+  "editing_settings": {
+    "dynamic_zoom": true,
+    "remove_silence": true,
+    "normalize_audio": true,
+    "contextual_broll": false,
+    "reaction_selection": true,
+    "visual_change_rhythm": true
+  }
+}
