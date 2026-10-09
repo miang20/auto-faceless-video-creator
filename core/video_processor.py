@@ -511,7 +511,7 @@ def _caption_filter(
             ]
         )
 
-    return ":".join(parts)
+    return parts[0] + "=" + ":".join(parts[1:])
 
 
 def _vertical_crop_filter(
