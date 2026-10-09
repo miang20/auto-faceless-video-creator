@@ -54,51 +54,31 @@ def decode_timestamp(value):
 
 
 def parse_section(path):
-    """
-    Parse section filenames such as:
-
-        t3dOepo9Rz4_1294_614_1298_054.mp4
-
-    into:
-
-        video_id = t3dOepo9Rz4
-        start    = 1294.614
-        end      = 1298.054
-    """
-
+    """Parse current and legacy section filenames."""
+    path = Path(path)
     name = path.stem
 
-    # Last four numeric filename components are:
-    # whole_start, decimal_start, whole_end, decimal_end
-    m = re.match(
-        r"^(.+?)_([0-9]+)_([0-9]+)_([0-9]+)_([0-9]+)$",
-        name,
-    )
+    m = re.match(r"^(.+?)__(\d+_\d+)__(\d+_\d+)$", name)
+    if m:
+        video_id = m.group(1)
+        start = decode_timestamp(m.group(2))
+        end = decode_timestamp(m.group(3))
+    else:
+        m = re.match(r"^(.+?)_(\d+)_(\d+)_(\d+)_(\d+)$", name)
+        if not m:
+            return None
+        video_id = m.group(1)
+        start = decode_timestamp(f"{m.group(2)}_{m.group(3)}")
+        end = decode_timestamp(f"{m.group(4)}_{m.group(5)}")
 
-    if not m:
-        return None
-
-    video_id = m.group(1)
-
-    start = decode_timestamp(
-        f"{m.group(2)}_{m.group(3)}"
-    )
-
-    end = decode_timestamp(
-        f"{m.group(4)}_{m.group(5)}"
-    )
-
-    duration = end - start
-
-    # Reject impossible / corrupted timestamp ranges.
-    if end <= start or duration <= 0:
+    if end <= start:
         return None
 
     return {
         "video_id": video_id,
         "start": round(start, 3),
         "end": round(end, 3),
-        "duration": round(duration, 3),
+        "duration": round(end - start, 3),
         "path": str(path),
     }
 
@@ -145,8 +125,7 @@ def find_clip_candidates(discovery, profile):
     topic = profile.get("content", {}).get("topic", "")
 
     beats = make_beats(profile)
-
-    section_dir = Path("repo/downloads/sections")
+    section_dir = Path(__file__).resolve().parent.parent / "downloads" / "sections"
 
     sections = []
 

@@ -195,27 +195,99 @@ def run_video_processing(
     caption_settings: Optional[dict] = None,
     editing_settings: Optional[dict] = None,
 ) -> dict:
+    source_path = str(video_path)
+    output_path = Path(output_dir) / f"final_{Path(source_path).stem}.mp4"
 
-    analysis = clip_analysis.get(
-        "analysis",
-        {},
-    )
+    # Prefer an assembled sequence when one is supplied.
+    raw_clips = []
+    if isinstance(clip_analysis, dict):
+        for key in ("sequence", "clips"):
+            value = clip_analysis.get(key)
+            if isinstance(value, list) and value:
+                raw_clips = value
+                break
 
-    clips = analysis.get(
-        "clips",
-        [],
+        if not raw_clips:
+            analysis = clip_analysis.get("analysis", {})
+            if isinstance(analysis, dict):
+                raw_clips = analysis.get("clips", []) or []
+
+    timeline = []
+    last_end_by_path = {}
+
+    for clip in raw_clips:
+        if not isinstance(clip, dict):
+            continue
+
+        # local_path identifies a previously downloaded/cropped section.
+        local_section = clip.get("local_path")
+        clip_path = str(
+            local_section
+            or clip.get("path")
+            or clip.get("file_path")
+            or clip.get("file")
+            or source_path
+        )
+
+        if local_section:
+            start = clip.get("local_start", 0)
+            end = clip.get("local_end")
+            if end is None:
+                end = clip.get("duration")
+                if end is None:
+                    original_start = clip.get("start", clip.get("start_time", 0))
+                    original_end = clip.get("end", clip.get("end_time"))
+                    try:
+                        end = float(original_end) - float(original_start)
+                    except (TypeError, ValueError):
+                        continue
+        else:
+            start = clip.get("start", clip.get("start_time", 0))
+            end = clip.get("end", clip.get("end_time"))
+
+        try:
+            start = max(0.0, float(start))
+            end = float(end)
+        except (TypeError, ValueError):
+            continue
+
+        if end <= start:
+            continue
+
+        # Prevent overlapping cuts from the same file, but keep the
+        # chosen sequence order and allow cuts from different files.
+        if start < last_end_by_path.get(clip_path, -1.0):
+            continue
+
+        timeline.append({
+            "path": clip_path,
+            "start": start,
+            "end": end,
+            "text": str(
+                clip.get("text")
+                or clip.get("caption")
+                or clip.get("caption_text")
+                or ""
+            ),
+            "role": clip.get("role", ""),
+        })
+        last_end_by_path[clip_path] = end
+
+    print(f"[VIDEO PROCESSOR] Selected clips: {len(timeline)}")
+    print(
+        "[VIDEO PROCESSOR] Distinct source files: "
+        f"{len({item['path'] for item in timeline})}"
     )
 
     return process_video(
-        video_path=video_path,
-        clips=clips,
-        output_dir=output_dir,
-        make_vertical=make_vertical,
-        duration=duration,
-        caption_style=caption_style,
+        input_video=source_path,
+        output_path=str(output_path),
+        clips=timeline or None,
+        target_duration=duration,
         caption_settings=caption_settings or {},
         editing_settings=editing_settings or {},
     )
+
 
 
 # =========================================================
@@ -379,12 +451,126 @@ def run_video_pipeline(
     )
 
     # -----------------------------------------------------
+
+    # V2_SEQUENCE_INTEGRATION
+    # Connect research sources -> section downloads -> candidate scoring
+    # -> sequence builder. Preserve the original clip-analysis fallback.
+    render_analysis = clip_analysis
+
+    try:
+        from core.section_downloader import download_section
+        from core.clip_finder import find_clip_candidates
+        from core.sequence_builder import build_sequence
+
+        sources = (
+            research.get("sources", [])
+            if isinstance(research, dict)
+            else research if isinstance(research, list) else []
+        )
+        sources = [
+            item for item in sources
+            if isinstance(item, dict)
+            and item.get("url")
+            and item.get("video_id")
+        ][:3]
+
+        raw_beats = clip_analysis.get("clips", [])
+        profile = {
+            "content": {
+                "topic": topic or "",
+                "keywords": [
+                    word.strip(".,!?;:")
+                    for word in (topic or "").split()
+                    if len(word.strip(".,!?;:")) > 2
+                ],
+            },
+            "peak_moments": [
+                {
+                    "index": index + 1,
+                    "text": str(item.get("text") or item.get("caption") or ""),
+                    "start": item.get("start", item.get("start_time")),
+                    "end": item.get("end", item.get("end_time")),
+                }
+                for index, item in enumerate(raw_beats)
+                if isinstance(item, dict)
+                and item.get("start", item.get("start_time")) is not None
+                and item.get("end", item.get("end_time")) is not None
+            ],
+        }
+
+        downloaded = 0
+        # Sample three short windows from each of the top research sources.
+        # Failed/too-short sources are skipped; the frozen core downloader
+        # and the existing pipeline fallback remain unchanged.
+        for item in sources:
+            for start, end in ((0, 10), (10, 20), (20, 30)):
+                try:
+                    result_path = download_section(
+                        url=item["url"],
+                        start=start,
+                        end=end,
+                        video_id=str(item["video_id"]),
+                    )
+                    if result_path and Path(result_path).is_file():
+                        downloaded += 1
+                except Exception as download_error:
+                    print(
+                        "[V2 SEQUENCE] Section skipped:",
+                        item.get("video_id"),
+                        start, end, str(download_error)[:160],
+                    )
+
+        print(f"[V2 SEQUENCE] Sections downloaded: {downloaded}")
+
+        if downloaded and profile["peak_moments"]:
+            discovery = {"sources": sources}
+            candidate_report = find_clip_candidates(discovery, profile)
+            sequence_report = build_sequence(
+                profile,
+                candidate_report,
+                target_duration=duration or 30,
+            )
+
+            if sequence_report.get("success") and sequence_report.get("sequence"):
+                render_analysis = {
+                    "sequence": sequence_report["sequence"],
+                    "sequence_report": sequence_report,
+                    "candidate_report": candidate_report,
+                }
+                clip_analysis["sequence_report"] = sequence_report
+                clip_analysis["candidate_report_summary"] = {
+                    "candidate_count": candidate_report.get("candidate_count", 0),
+                    "sections_analyzed": candidate_report.get("sections_analyzed", 0),
+                    "beats_analyzed": candidate_report.get("beats_analyzed", 0),
+                }
+                save_json(
+                    clip_analysis,
+                    output / f"{pipeline_id}_clip_analysis.json",
+                )
+                print(
+                    "[V2 SEQUENCE] Selected:",
+                    sequence_report.get("clip_count", 0),
+                    "clips; estimated duration:",
+                    sequence_report.get("estimated_duration", 0),
+                )
+            else:
+                print("[V2 SEQUENCE] No usable sequence; using original clips.")
+        else:
+            print("[V2 SEQUENCE] Insufficient sections/beats; using original clips.")
+
+    except Exception as integration_error:
+        render_analysis = clip_analysis
+        print(
+            "[V2 SEQUENCE] Integration fallback:",
+            repr(integration_error)[:300],
+        )
+
     # 7. FINAL VIDEO
     # -----------------------------------------------------
 
     processing = run_video_processing(
         video_path=video_path,
-        clip_analysis=clip_analysis,
+        clip_analysis=render_analysis,
         output_dir=output,
         make_vertical=make_vertical,
         duration=duration,
