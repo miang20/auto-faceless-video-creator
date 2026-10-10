@@ -320,18 +320,55 @@ def run_video_job(
         )
 
         if not result.get("success"):
-            error = result.get(
-                "error",
-                "Pipeline execution failed.",
+            error = str(result.get("error", "Pipeline execution failed."))
+            # Last-resort recovery for FFmpeg drawtext/parser errors. The
+            # renderer normally retries the affected segment itself; if an
+            # older local renderer or another caption edge case still fails,
+            # rerun the same downloaded source and edit plan without captions.
+            # This does not touch the frozen downloader or other edit settings.
+            caption_settings_enabled = (
+                isinstance(caption_settings, dict)
+                and caption_settings.get("enabled", True) is not False
             )
+            if caption_settings_enabled and "drawtext" in error.lower():
+                print(
+                    "[V2 JOB] Caption rendering failed; retrying the full "
+                    "pipeline once with captions disabled."
+                )
+                safe_caption_settings = dict(caption_settings)
+                safe_caption_settings["enabled"] = False
+                result = execute_video_pipeline(
+                    video_path=video_path,
+                    topic=job.get("input_value"),
+                    reference_url=job.get("reference_url"),
+                    whisper_command=whisper_command,
+                    model_path=model_path,
+                    language=language,
+                    max_clips=max_clips,
+                    output_dir=output_dir,
+                    make_vertical=make_vertical,
+                    keep_audio=keep_audio,
+                    duration=duration,
+                    caption_style=caption_style,
+                    caption_settings=safe_caption_settings,
+                    editing_settings=editing_settings,
+                )
+                if result.get("success"):
+                    result["caption_fallback_used"] = True
+                    result["caption_fallback_reason"] = (
+                        "FFmpeg drawtext parser failure; captions disabled "
+                        "for this render to preserve the final video."
+                    )
+                else:
+                    error = str(result.get("error", error))
 
-            update_job_status(
-                job_id=job_id,
-                status="failed",
-                error=error,
-            )
-
-            return result
+            if not result.get("success"):
+                update_job_status(
+                    job_id=job_id,
+                    status="failed",
+                    error=error,
+                )
+                return result
 
         phone_copy_path = _copy_final_video_to_phone(result, output_dir)
         if phone_copy_path:
