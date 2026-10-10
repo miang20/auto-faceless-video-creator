@@ -753,7 +753,19 @@ def _render_live_dashboard():
                         else:
                             st.warning("Job says completed, but its MP4 could not be located yet.")
                 with right:
-                    st.metric("Duration", f'{job.get("duration", 0)}s')
+                    actual_duration = job.get("duration_seconds")
+                    display_duration = (
+                        f'{float(actual_duration):.1f}s'
+                        if actual_duration not in (None, "")
+                        else f'{job.get("duration", 0)}s target'
+                    )
+                    st.metric("Duration", display_duration)
+                if status == "completed" and job.get("resolution"):
+                    size_mb = float(job.get("size_bytes") or 0) / (1024 * 1024)
+                    st.caption(
+                        f'Verified output: {job.get("resolution")} • '
+                        f'{job.get("fps") or "FPS verified"} • {size_mb:.1f} MB'
+                    )
 
             if status == "completed":
                 notified = st.session_state.setdefault("v2_notified_completed", [])
