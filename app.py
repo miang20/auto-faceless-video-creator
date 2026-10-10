@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -152,8 +153,10 @@ def github_jobs():
         except Exception:
             continue
 
+    # Sort by actual creation time; legacy/requeued jobs fall back to updated_at.
+    # UUID-based job_id sorting is random and can show an older job as the latest.
     jobs.sort(
-        key=lambda x: x.get("job_id", ""),
+        key=lambda x: x.get("created_at") or x.get("updated_at") or "",
         reverse=True,
     )
 
@@ -172,6 +175,7 @@ def create_v2_job(
 
     job = {
         "job_id": job_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "status": "queued",
         "pipeline": "video",
         "pipeline_version": "2.0",
