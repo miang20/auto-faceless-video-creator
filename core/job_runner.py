@@ -352,7 +352,7 @@ def run_video_job(
                     whisper_command=whisper_command,
                     model_path=model_path,
                     language=language,
-                    max_clips=max_clips,
+                    max_clips=job_max_clips,
                     output_dir=output_dir,
                     make_vertical=make_vertical,
                     keep_audio=keep_audio,
