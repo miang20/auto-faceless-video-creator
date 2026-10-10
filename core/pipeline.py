@@ -4,6 +4,7 @@ import json
 import uuid
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from core.research import research_topic
 from core.source_analyzer import build_analysis_report
@@ -241,7 +242,7 @@ def run_video_processing(
         timeline.append({
             "path": clip_path, "start": start, "end": end,
             "duration": end - start,
-            "text": str(clip.get("text") or clip.get("caption") or clip.get("caption_text") or ""),
+            "text": str(clip.get("text") or clip.get("caption") or clip.get("caption_text") or clip.get("beat_text") or clip.get("transcript") or ""),
             "role": clip.get("role", clip.get("story_role", "")),
             "score": clip.get("score", clip.get("final_score", 0)),
         })
@@ -297,6 +298,28 @@ def run_video_pipeline(
     caption_settings: Optional[dict] = None,
     editing_settings: Optional[dict] = None,
 ) -> dict:
+
+    # The UI submits the reference URL as input_value. Resolve its title so
+    # research searches use a human-readable topic instead of a URL string.
+    topic_text = str(topic or "").strip()
+    parsed_topic = urlparse(topic_text) if topic_text else None
+    if parsed_topic and parsed_topic.scheme in {"http", "https"} and parsed_topic.hostname:
+        host = parsed_topic.hostname.lower().rstrip(".")
+        if host == "youtu.be" or host.endswith("youtube.com"):
+            reference_url = reference_url or topic_text
+            try:
+                import yt_dlp
+                with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
+                    info = ydl.extract_info(reference_url, download=False)
+                resolved_title = str(info.get("title") or "").strip()
+                topic = resolved_title or Path(video_path).stem
+            except Exception as metadata_error:
+                print("[V2 RESEARCH] Reference title lookup failed:", str(metadata_error)[:180])
+                topic = Path(video_path).stem
+        else:
+            topic = topic_text
+    elif topic_text:
+        topic = topic_text
 
     pipeline_id = create_pipeline_id()
 
@@ -515,6 +538,7 @@ def run_video_pipeline(
                 profile,
                 candidate_report,
                 target_duration=duration or 30,
+                editing_settings=editing_settings,
             )
 
             if sequence_report.get("success") and sequence_report.get("sequence"):

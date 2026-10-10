@@ -29,106 +29,137 @@ def _key(candidate):
     )
 
 
-def build_sequence(profile, clip_analysis, target_duration=60):
+def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=None):
     target_duration = max(10, min(int(target_duration), 600))
+    settings = dict(editing_settings or {})
+    reaction_enabled = bool(settings.get("reaction_selection", settings.get("use_reactions", True)))
+    contextual_broll = bool(settings.get("contextual_broll", settings.get("use_broll", True)))
+    visual_rhythm = bool(settings.get("visual_change_rhythm", True))
 
     candidates = list(
-        clip_analysis.get("candidates",
-        clip_analysis.get("top_candidates", []))
+        clip_analysis.get("candidates", clip_analysis.get("top_candidates", []))
     )
-
     candidates = [
         x for x in candidates
         if x.get("start") is not None
         and x.get("end") is not None
-        and _duration(x) >= 2.0
+        and _duration(x) >= 1.0
     ]
 
-    candidates.sort(key=_score, reverse=True)
+    def rank(candidate, recent_sources):
+        value = _score(candidate)
+        if reaction_enabled:
+            value += float(candidate.get("reaction_score", 0) or 0) * 0.12
+        source_id = candidate.get("source_video_id")
+        if visual_rhythm and source_id and source_id not in recent_sources:
+            value += 0.12
+        if contextual_broll and source_id and source_id not in {
+            item.get("source_video_id") for item in sequence
+        }:
+            value += 0.06
+        return value
 
+    candidates.sort(key=_score, reverse=True)
     sequence = []
     used = set()
     total = 0.0
 
-    # Prefer one strong candidate per beat first.
-    beat_ids = []
-    for candidate in candidates:
-        beat = candidate.get("beat_id")
-        if beat and beat not in beat_ids:
-            beat_ids.append(beat)
-
-    for beat_id in beat_ids:
-        for candidate in candidates:
-            if candidate.get("beat_id") != beat_id:
-                continue
-
-            key = _key(candidate)
-            duration = _duration(candidate)
-
-            if key in used:
-                continue
-
-            if total + duration > target_duration and sequence:
-                continue
-
-            sequence.append({
-                "order": len(sequence) + 1,
-                "beat_id": candidate.get("beat_id"),
-                "source_video_id": candidate.get("source_video_id"),
-                "source_url": candidate.get("source_url"),
-                "source_title": candidate.get("source_title", ""),
-                "local_path": candidate.get("local_path"),
-                "start": candidate.get("start"),
-                "end": candidate.get("end"),
-                "duration": round(duration, 3),
-                "score": _score(candidate),
-                "semantic_score": candidate.get("semantic_score", 0),
-                "source_score": candidate.get("source_score", 0),
-                "role": (
-                    "hook"
-                    if len(sequence) == 0
-                    else "peak"
-                    if len(sequence) == 1
-                    else "main"
-                ),
-            })
-
-            used.add(key)
-            total += duration
-            break
-
-    # Fill remaining duration with best unused candidates.
-    for candidate in candidates:
-        if total >= target_duration * 0.85:
-            break
-
+    def append_candidate(candidate):
+        nonlocal total
         key = _key(candidate)
         duration = _duration(candidate)
+        if key in used or duration <= 0:
+            return False
+        if total + duration > target_duration and sequence:
+            return False
 
-        if key in used:
-            continue
+        source_id = candidate.get("source_video_id")
+        recent_sources = {
+            item.get("source_video_id") for item in sequence[-2:]
+        }
+        different_recent = bool(source_id and source_id not in recent_sources)
+        reaction_score = float(candidate.get("reaction_score", 0) or 0)
 
-        if total + duration > target_duration:
-            continue
+        if not sequence:
+            role = "hook"
+        elif reaction_enabled and reaction_score >= 0.25:
+            role = "reaction"
+        elif contextual_broll and (len(sequence) + 1) % 3 == 0 and different_recent:
+            role = "broll"
+        elif len(sequence) == 1:
+            role = "peak"
+        else:
+            role = "main"
 
         sequence.append({
             "order": len(sequence) + 1,
             "beat_id": candidate.get("beat_id"),
-            "source_video_id": candidate.get("source_video_id"),
+            "source_video_id": source_id,
             "source_url": candidate.get("source_url"),
             "source_title": candidate.get("source_title", ""),
             "local_path": candidate.get("local_path"),
+            "local_start": candidate.get("local_start", 0),
+            "local_end": candidate.get("local_end"),
             "start": candidate.get("start"),
             "end": candidate.get("end"),
             "duration": round(duration, 3),
             "score": _score(candidate),
             "semantic_score": candidate.get("semantic_score", 0),
             "source_score": candidate.get("source_score", 0),
-            "role": "main",
+            "reaction_score": reaction_score,
+            "text": candidate.get("beat_text", ""),
+            "role": role,
         })
-
         used.add(key)
         total += duration
+        return True
+
+    beat_ids = []
+    for candidate in candidates:
+        beat = candidate.get("beat_id")
+        if beat and beat not in beat_ids:
+            beat_ids.append(beat)
+
+    # Choose the strongest candidate for each beat, with modest bonuses for
+    # source variety and detected reaction language when those features are on.
+    for beat_id in beat_ids:
+        if total >= target_duration * 0.9:
+            break
+        options = [
+            item for item in candidates
+            if item.get("beat_id") == beat_id and _key(item) not in used
+        ]
+        options.sort(
+            key=lambda item: rank(
+                item,
+                {x.get("source_video_id") for x in sequence[-2:]},
+            ),
+            reverse=True,
+        )
+        for candidate in options:
+            if append_candidate(candidate):
+                break
+
+    # Fill any remaining time with the best unused sections while maintaining
+    # a visual source-change rhythm where viable.
+    while total < target_duration * 0.85:
+        options = [item for item in candidates if _key(item) not in used]
+        if not options:
+            break
+        options.sort(
+            key=lambda item: rank(
+                item,
+                {x.get("source_video_id") for x in sequence[-2:]},
+            ),
+            reverse=True,
+        )
+        appended = False
+        for candidate in options:
+            if append_candidate(candidate):
+                appended = True
+                break
+        if not appended:
+            break
 
     return {
         "version": VERSION,
@@ -141,16 +172,14 @@ def build_sequence(profile, clip_analysis, target_duration=60):
         "editing_plan": {
             "vertical": True,
             "fast_cuts": True,
-            "dynamic_crops": True,
-            "captions": True,
-            "sound_effects": True,
-            "music_layer": True,
-            "beat_sync": True,
-            "smart_reframing": True,
-            "source_diversification": True,
+            "dynamic_crops": bool(settings.get("dynamic_zoom", True)),
+            "captions": bool(settings.get("captions", True)),
+            "source_diversification": visual_rhythm,
+            "contextual_broll": contextual_broll,
+            "reaction_selection": reaction_enabled,
+            "visual_change_rhythm": visual_rhythm,
         },
     }
-
 
 def save_sequence(data, path):
     path = Path(path)

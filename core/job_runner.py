@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -9,6 +11,45 @@ from core.job_store import save_job, load_job
 from core.github_jobs import create_github_job
 from core.downloader import download_video
 from core.pipeline import execute_video_pipeline
+
+
+def _copy_final_video_to_phone(result: dict) -> Optional[str]:
+    """Best-effort automatic copy for the Termux worker; harmless off-device."""
+    candidates = [
+        result.get("output_path"),
+        result.get("final_video"),
+        result.get("processing", {}).get("output_path")
+        if isinstance(result.get("processing"), dict) else None,
+    ]
+    source = next(
+        (Path(value) for value in candidates if value and Path(value).is_file()),
+        None,
+    )
+    if source is None:
+        return None
+
+    destination_dir = Path.home() / "storage" / "shared" / "Movies" / "AutoFaceless"
+    try:
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = destination_dir / source.name
+        if source.resolve() != destination.resolve():
+            shutil.copy2(source, destination)
+        try:
+            subprocess.run(
+                ["termux-media-scan", str(destination)],
+                timeout=15,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+        print("[V2 PHONE COPY] Final MP4 saved:", str(destination))
+        return str(destination)
+    except Exception as copy_error:
+        # Phone storage permission must not turn a valid render into a failed job.
+        print("[V2 PHONE COPY] Skipped:", str(copy_error)[:240])
+        return None
 
 
 def create_and_store_job(
@@ -249,6 +290,10 @@ def run_video_job(
             )
 
             return result
+
+        phone_copy_path = _copy_final_video_to_phone(result)
+        if phone_copy_path:
+            result["phone_copy_path"] = phone_copy_path
 
         result_file = (
             Path(output_dir)

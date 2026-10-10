@@ -441,8 +441,39 @@ with st.expander("📝 Caption Settings", expanded=True):
         value=True,
     )
 
+    cap_col1, cap_col2 = st.columns(2)
+    with cap_col1:
+        caption_font_size = st.slider(
+            "Caption Font Size",
+            min_value=32,
+            max_value=82,
+            value=58,
+            step=2,
+        )
+        caption_position = st.selectbox(
+            "Caption Position",
+            ["lower-third", "bottom", "center", "top"],
+            index=0,
+        )
+    with cap_col2:
+        caption_stroke = st.checkbox("Black Text Outline", value=True)
+        caption_shadow = st.checkbox("Text Shadow", value=True)
+        caption_box = st.checkbox("Caption Background Box", value=False)
+
     caption_settings = {
         "enabled": caption_enabled,
+        "font": "DejaVu Sans",
+        "font_size": int(caption_font_size),
+        "position": caption_position,
+        "text_color": "white",
+        "highlight_color": "yellow",
+        "stroke": caption_stroke,
+        "stroke_width": 3,
+        "shadow": caption_shadow,
+        "background_box": caption_box,
+        "box": caption_box,
+        "words_per_line": 3,
+        "max_lines": 1,
     }
 
 
