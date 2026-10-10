@@ -62,3 +62,20 @@ def test_real_ffmpeg_render_captions_zoom_silence_and_audio(tmp_path):
     assert report["height"] == 1920
     assert report["duration"] < 1.95
     assert report["duration"] > 0.5
+
+    # Confirm the active-word highlight is actually burned into rendered pixels,
+    # rather than allowing a silent fallback to an uncaptioned video.
+    frame = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-ss", "0.15", "-i", str(output), "-frames:v", "1",
+            "-vf", "crop=1080:420:0:1050",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+        ],
+        check=True, capture_output=True, timeout=30,
+    ).stdout
+    yellow_pixels = sum(
+        1 for i in range(0, len(frame) - 2, 3)
+        if frame[i] > 150 and frame[i + 1] > 130 and frame[i + 2] < 120
+    )
+    assert yellow_pixels > 20, f"Expected yellow word-highlight pixels, found {yellow_pixels}"
