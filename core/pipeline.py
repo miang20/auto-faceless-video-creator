@@ -140,6 +140,12 @@ def run_script_generation(
             "story_structure": [],
             "editing": dict(editing_settings or {}),
         }
+    if isinstance(research, dict):
+        script["context_sources"] = research.get("sources", []) or []
+        script["source_analysis_summary"] = {
+            "source_count": research.get("source_count", len(script["context_sources"])),
+            "summary": research.get("summary", {}),
+        }
     script["visual_editing_plan"] = dict(script.get("editing", {}))
     return script
 
@@ -478,7 +484,7 @@ def run_video_pipeline(
     try:
         script = run_script_generation(
             topic=topic or "",
-            research=research,
+            research=source_analysis,
             reference_url=reference_url,
             clip_analysis=clip_analysis,
             target_duration=duration or 30,
@@ -508,11 +514,21 @@ def run_video_pipeline(
         from core.clip_finder import find_clip_candidates
         from core.sequence_builder import build_sequence
 
-        sources = (
+        analyzed_sources = (
+            source_analysis.get("sources", [])
+            if isinstance(source_analysis, dict) else []
+        )
+        raw_sources = analyzed_sources or (
             research.get("sources", [])
             if isinstance(research, dict)
             else research if isinstance(research, list) else []
         )
+        sources = [
+            item for item in raw_sources
+            if isinstance(item, dict)
+            and item.get("url")
+            and item.get("video_id")
+        ][:3]
         sources = [
             item for item in sources
             if isinstance(item, dict)
