@@ -717,6 +717,40 @@ def _build_video_filter(
     return ",".join(filters)
 
 
+def _detect_internal_silence(
+    input_path: str,
+    start: float,
+    duration: float,
+) -> List[Tuple[float, float]]:
+    """Find internal quiet gaps so matching video frames and audio can both be removed."""
+    command = [
+        "ffmpeg", "-hide_banner", "-nostats", "-ss", f"{start:.3f}",
+        "-t", f"{duration:.3f}", "-i", input_path, "-vn",
+        "-af", "silencedetect=noise=-42dB:d=0.35",
+        "-f", "null", "-",
+    ]
+    try:
+        result = _run_command(command, timeout=45)
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    log = (result.stderr or "") + "\n" + (result.stdout or "")
+    starts = re.findall(r"silence_start:\s*(-?\d+(?:\.\d+)?)", log)
+    ends = re.findall(r"silence_end:\s*(-?\d+(?:\.\d+)?)", log)
+    intervals: List[Tuple[float, float]] = []
+    for raw_start, raw_end in zip(starts, ends):
+        silence_start, silence_end = float(raw_start), float(raw_end)
+        # Keep only internal gaps. Trimming at clip edges can cut meaningful
+        # ambience or make dialogue feel abruptly clipped.
+        if (
+            silence_end - silence_start >= 0.35
+            and silence_start >= 0.08
+            and silence_end <= duration - 0.08
+        ):
+            intervals.append((silence_start, silence_end))
+    return intervals
+
+
 def _render_single_segment(
     input_path: str,
     output_path: str,
@@ -743,68 +777,59 @@ def _render_single_segment(
         duration,
     )
 
+    remove_silence = bool(editing_settings.get("remove_silence", False))
+    silences = _detect_internal_silence(segment_input_path, start, duration) if remove_silence else []
+    effective_duration = max(0.1, duration - sum(end - begin for begin, end in silences))
+
     video_filter = _build_video_filter(
         width,
         height,
         output_width,
         output_height,
-        duration,
+        effective_duration,
         editing_settings,
         caption_settings,
         caption_text=_clean_text(clip.get("text", "")),
     )
 
     command = [
-        "ffmpeg",
-        "-y",
-        "-ss",
-        f"{start:.3f}",
-        "-i",
-        segment_input_path,
-        "-t",
-        f"{duration:.3f}",
-        "-vf",
-        video_filter,
-        "-r",
-        str(fps),
-        "-map",
-        "0:v:0",
-        "-map",
-        "0:a?",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        str(
-            _safe_int(
-                editing_settings.get(
-                    "crf",
-                    DEFAULT_CRF,
-                ),
-                DEFAULT_CRF,
-            )
-        ),
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "160k",
+        "ffmpeg", "-y", "-ss", f"{start:.3f}",
+        "-i", segment_input_path, "-t", f"{duration:.3f}",
     ]
 
-    audio_filters = []
-    if bool(editing_settings.get("remove_silence", False)):
-        # Conservative gate: remove extended low-level gaps, not ordinary pauses.
-        audio_filters.append(
-            "silenceremove=start_periods=1:start_duration=0.30:"
-            "start_threshold=-42dB:stop_periods=-1:stop_duration=0.40:"
-            "stop_threshold=-42dB"
+    if silences:
+        silence_expression = "+".join(
+            f"between(t\\,{begin:.3f}\\,{end:.3f})"
+            for begin, end in silences
         )
-    if bool(editing_settings.get("audio_normalize", editing_settings.get("normalize_audio", True))):
-        audio_filters.append("loudnorm=I=-14:TP=-1.5:LRA=11")
-    if audio_filters:
-        command.extend(["-af", ",".join(audio_filters)])
+        video_select = f"select='not({silence_expression})',setpts=N/(FRAME_RATE*TB)"
+        audio_select = f"aselect='not({silence_expression})',asetpts=N/SR/TB"
+        audio_chain = audio_select
+        if bool(editing_settings.get("audio_normalize", editing_settings.get("normalize_audio", True))):
+            audio_chain += ",loudnorm=I=-14:TP=-1.5:LRA=11"
+        command.extend([
+            "-filter_complex",
+            f"[0:v:0]{video_select},{video_filter}[v];[0:a:0]{audio_chain}[a]",
+            "-map", "[v]", "-map", "[a]",
+        ])
+    else:
+        command.extend([
+            "-vf", video_filter,
+            "-map", "0:v:0", "-map", "0:a?",
+        ])
+
+    command.extend([
+        "-r", str(fps),
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", str(_safe_int(editing_settings.get("crf", DEFAULT_CRF), DEFAULT_CRF)),
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "160k",
+    ])
+
+    if not silences and bool(editing_settings.get("audio_normalize", editing_settings.get("normalize_audio", True))):
+        command.extend(["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"])
 
     command.extend(
         [
