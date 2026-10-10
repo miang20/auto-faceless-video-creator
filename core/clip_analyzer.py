@@ -986,16 +986,29 @@ def analyze_transcript(
         if hook_candidate:
             hook_candidate["story_role"] = "HOOK"
 
-            existing_hook = any(
-                item.get("story_role") == "HOOK"
-                for item in selected
+            # The strongest hook must be included, but never by inserting an
+            # overlapping interval that the renderer later silently discards.
+            selected = [
+                item for item in selected
+                if _overlap_ratio(item, hook_candidate) < 0.55
+            ]
+            selected = [hook_candidate, *selected]
+            remaining_candidates = sorted(
+                candidates,
+                key=lambda item: _safe_float(item.get("score")),
+                reverse=True,
             )
-
-            if not existing_hook:
-                selected = [
-                    hook_candidate,
-                    *selected,
-                ][:max(1, int(max_clips))]
+            for candidate in remaining_candidates:
+                if len(selected) >= max(1, int(max_clips)):
+                    break
+                if candidate is hook_candidate:
+                    continue
+                if any(
+                    _overlap_ratio(candidate, existing) >= 0.55
+                    for existing in selected
+                ):
+                    continue
+                selected.append(candidate)
 
     selected.sort(
         key=lambda item: _safe_float(item.get("start"))
