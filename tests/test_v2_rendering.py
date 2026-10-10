@@ -75,3 +75,20 @@ def test_sequence_builder_respects_duration_and_carries_local_ranges():
     assert result["sequence"]
     assert result["estimated_duration"] <= 10
     assert all(item["local_end"] > item["local_start"] for item in result["sequence"])
+
+def test_caption_textfiles_preserve_punctuation_without_inline_text(tmp_path):
+    from pathlib import Path
+
+    filters = _dynamic_caption_filters(
+        "It's 100% perfect: wow, really?",
+        2.0,
+        {"enabled": True, "font_size": 48},
+        textfile_dir=str(tmp_path),
+    )
+    assert filters
+    assert all("textfile=" in item for item in filters)
+    assert all("text='" not in item for item in filters)
+    saved = [p.read_text(encoding="utf-8") for p in Path(tmp_path).glob("caption_*.txt")]
+    assert "It's" in saved
+    assert "100%" in saved
+    assert "really?" in saved
