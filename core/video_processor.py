@@ -1002,13 +1002,17 @@ def _render_single_segment(
             )
         )
         if caption_filter_failure:
-            # Keep the job renderable if an individual caption trips FFmpeg's
-            # drawtext parser. Retry this segment with captions disabled only;
-            # preserve the selected clip, crop/zoom, audio, and all other edits.
-            print(
-                "[V2 RENDER] Caption parser rejected text; retrying this "
-                "segment without captions."
-            )
+            # Production captions use textfiles. Silently disabling captions
+            # would create a falsely successful, uncaptioned final video.
+            # Surface this error so CI and the job status stay truthful.
+            if caption_text_dir:
+                raise RuntimeError(
+                    "FFmpeg rejected textfile-based captions; refusing to "
+                    "complete the job without required captions.\\n"
+                    + stderr_text[-4000:]
+                )
+            # Legacy callers without textfiles retain the old safe fallback.
+            print("[V2 RENDER] Inline caption parser rejected text; retrying without captions.")
             safe_captions = dict(caption_settings or {})
             safe_captions["enabled"] = False
             return _render_single_segment(
