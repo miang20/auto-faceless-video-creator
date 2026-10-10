@@ -529,22 +529,23 @@ def run_video_pipeline(
             and item.get("url")
             and item.get("video_id")
         ][:3]
-        sources = [
-            item for item in sources
-            if isinstance(item, dict)
-            and item.get("url")
-            and item.get("video_id")
-        ][:3]
-
         raw_beats = script.get("timeline") or clip_analysis.get("clips", [])
         profile = {
             "content": {
                 "topic": topic or "",
-                "keywords": [
-                    word.strip(".,!?;:")
-                    for word in (topic or "").split()
-                    if len(word.strip(".,!?;:")) > 2
-                ],
+                "keywords": list(dict.fromkeys(
+                    [
+                        word.strip(".,!?;:")
+                        for word in (topic or "").split()
+                        if len(word.strip(".,!?;:")) > 2
+                    ]
+                    + [
+                        str(keyword).strip(".,!?;:")
+                        for source in sources
+                        for keyword in (source.get("keywords", []) or [])
+                        if len(str(keyword).strip(".,!?;:")) > 2
+                    ]
+                )),
             },
             "peak_moments": [
                 {
