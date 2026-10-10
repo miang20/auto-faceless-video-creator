@@ -793,18 +793,18 @@ def _render_single_segment(
         "160k",
     ]
 
-    if bool(
-        editing_settings.get(
-            "audio_normalize",
-            True,
+    audio_filters = []
+    if bool(editing_settings.get("remove_silence", False)):
+        # Conservative gate: remove extended low-level gaps, not ordinary pauses.
+        audio_filters.append(
+            "silenceremove=start_periods=1:start_duration=0.30:"
+            "start_threshold=-42dB:stop_periods=-1:stop_duration=0.40:"
+            "stop_threshold=-42dB"
         )
-    ):
-        command.extend(
-            [
-                "-af",
-                "loudnorm=I=-14:TP=-1.5:LRA=11",
-            ]
-        )
+    if bool(editing_settings.get("audio_normalize", editing_settings.get("normalize_audio", True))):
+        audio_filters.append("loudnorm=I=-14:TP=-1.5:LRA=11")
+    if audio_filters:
+        command.extend(["-af", ",".join(audio_filters)])
 
     command.extend(
         [
