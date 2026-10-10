@@ -305,7 +305,38 @@ def run_video_processing(
     print(f"[VIDEO PROCESSOR] Distinct source files: {len({x['path'] for x in timeline})}")
     if not timeline:
         raise ValueError("No usable clips found: candidate paths/timestamps were invalid.")
-    from core.video_processor import process_video
+    from core.video_processor import process_video, _probe_duration
+    requested = max(0.0, float(duration or 0))
+    try:
+        source_duration = float(_probe_duration(source_path))
+    except Exception:
+        source_duration = 0.0
+
+    selected_duration = sum(max(0.0, float(item.get("end", 0)) - float(item.get("start", 0))) for item in timeline)
+    # Never render a tiny external-sequence fragment when the selected sequence
+    # cannot reasonably satisfy the requested duration. Fall back to the full
+    # reference source (without looping or padding) instead.
+    minimum_usable = min(requested * 0.65, source_duration * 0.80) if requested and source_duration else 0.0
+    if source_duration > 0 and selected_duration < minimum_usable:
+        fallback_text = " ".join(
+            str(item.get("text", "")).strip()
+            for item in timeline
+            if str(item.get("text", "")).strip()
+        ).strip()
+        timeline = [{
+            "path": source_path,
+            "start": 0.0,
+            "end": source_duration,
+            "duration": source_duration,
+            "text": fallback_text,
+            "role": "MAIN",
+            "score": 0,
+        }]
+        print(
+            f"[V2 RENDER] Selected timeline too short ({selected_duration:.2f}s); "
+            f"using full source ({source_duration:.2f}s) instead."
+        )
+
     editing = dict(editing_settings or {})
     editing.setdefault("make_vertical", make_vertical)
     editing.setdefault("audio_normalize", editing.get("normalize_audio", True))
@@ -321,6 +352,13 @@ def run_video_processing(
     rendered_path = str(rendered_path or output_path)
     if not Path(rendered_path).is_file() or Path(rendered_path).stat().st_size <= 0:
         raise RuntimeError(f"Renderer returned without a valid MP4: {rendered_path}")
+    actual_duration = float(_probe_duration(rendered_path))
+    expected_floor = min(requested * 0.65, source_duration * 0.75) if requested and source_duration else 0.0
+    if expected_floor > 0 and actual_duration < expected_floor:
+        raise RuntimeError(
+            f"Final render is too short ({actual_duration:.2f}s; expected at least "
+            f"{expected_floor:.2f}s). Refusing to mark this job completed."
+        )
     return {
         "success": True, "output_path": rendered_path,
         "final_video": rendered_path, "result_path": rendered_path,
