@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile application and pipeline
-        run: python -m compileall -q app.py core
+        run: python -m compileall -q app.py core worker
       - name: Verify FFmpeg filter repair and caption syntax
         run: |
           python - <<'PY'
