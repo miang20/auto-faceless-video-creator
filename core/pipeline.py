@@ -91,9 +91,10 @@ def run_source_analysis(
     reference_url: Optional[str] = None,
 ) -> dict:
 
-    sources = research.get(
-        "sources",
-        [],
+    sources = (
+        research.get("sources", [])
+        if isinstance(research, dict)
+        else research if isinstance(research, list) else []
     )
 
     return build_analysis_report(
