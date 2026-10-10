@@ -4,7 +4,8 @@ set -Eeuo pipefail
 REPO_DIR="$HOME/v2-test/repo"
 JOB_ID="v2_63eb8c9550c3"
 SERVICE="faceless-worker"
-TOKEN_FILE="$PREFIX/var/service/af-v2-worker/env/GITHUB_TOKEN"
+TERMUX_PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+TOKEN_FILE="$TERMUX_PREFIX/var/service/af-v2-worker/env/GITHUB_TOKEN"
 BACKUP_DIR="$HOME/v2-test/pre-sync-backup/drawtext-recovery-$(date +%Y%m%d-%H%M%S)"
 
 cd "$REPO_DIR"
