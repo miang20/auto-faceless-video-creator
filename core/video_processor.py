@@ -424,8 +424,8 @@ def _dynamic_caption_filters(
             text_path = os.path.join(textfile_dir, f"caption_{textfile_index:04d}.txt")
             textfile_index += 1
             with open(text_path, "w", encoding="utf-8", newline="") as text_handle:
-                text_handle.write(str(label).replace("\\r", " ").replace("\\n", " "))
-            text_option = f"textfile={text_path}:expansion=none"
+                text_handle.write(str(label).replace("\\r", " ").replace("\\n", " ").replace("\r", " ").replace("\n", " "))
+            text_option = f"textfile='{text_path}':expansion=none"
         else:
             text_option = f"text='{_escape_drawtext(label)}'"
         parts = [
@@ -443,7 +443,7 @@ def _dynamic_caption_filters(
             parts.extend(["shadowx=2", "shadowy=2", "shadowcolor=black@0.65"])
         if box:
             parts.extend(["box=1", "boxcolor=black@0.55", "boxborderw=10"])
-        parts.append(f"enable='between(t\\,{start:.3f}\\,{end:.3f})'")
+        parts.append(f"enable='between(t,{start:.3f},{end:.3f})'")
         return "=".join(parts[:1]) + "=" + ":".join(parts[1:])
 
     # Group up to three words together. A yellow overlay advances word by word.
