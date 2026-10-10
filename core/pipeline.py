@@ -505,11 +505,39 @@ def run_video_pipeline(
 
     # -----------------------------------------------------
 
-    # V2_SEQUENCE_INTEGRATION
-    # Connect research sources -> section downloads -> candidate scoring
-    # -> sequence builder. Preserve the original clip-analysis fallback.
+    # Use the generated story blueprint even when external-source discovery
+    # is unavailable. This keeps HOOK/SETUP/ESCALATION/REACTION/PAYOFF order
+    # connected to the actual renderer instead of saving an unused script.
     render_analysis = clip_analysis
+    story_timeline = []
+    for item in script.get("timeline", []):
+        if not isinstance(item, dict):
+            continue
+        start = item.get("source_start", item.get("start", item.get("start_time")))
+        end = item.get("source_end", item.get("end", item.get("end_time")))
+        try:
+            start, end = float(start), float(end)
+        except (TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        story_timeline.append({
+            "start": start,
+            "end": end,
+            "duration": end - start,
+            "text": str(item.get("text") or ""),
+            "role": str(item.get("role") or "MAIN"),
+            "score": item.get("score", 0),
+        })
+    if story_timeline:
+        render_analysis = {
+            "sequence": story_timeline,
+            "story_blueprint": script,
+        }
 
+    # V2_SEQUENCE_INTEGRATION
+    # Connect research sources -> section downloads -> candidate scoring.
+    # Preserve the story-ordered local-source fallback if discovery fails.
     try:
         from core.section_downloader import download_section
         from core.clip_finder import find_clip_candidates
@@ -666,6 +694,16 @@ def run_video_pipeline(
         or processing.get("result_path")
     )
 
+    sequence_report = clip_analysis.get("sequence_report", {}) if isinstance(clip_analysis, dict) else {}
+    stage_status = {
+        "research": "complete" if bool(research) else "no_sources",
+        "source_analysis": "complete" if isinstance(source_analysis, dict) and source_analysis.get("source_count", 0) else "no_sources",
+        "clip_analysis": "complete" if isinstance(clip_analysis, dict) and clip_analysis.get("clips") else "no_clips",
+        "story_blueprint": "complete" if bool(script.get("timeline")) else "fallback",
+        "external_sequence": "complete" if isinstance(sequence_report, dict) and sequence_report.get("success") else "local_story_fallback",
+        "render": "complete" if processing.get("success") else "failed",
+    }
+
     result = {
         "success": bool(
             processing.get(
@@ -673,6 +711,18 @@ def run_video_pipeline(
                 False,
             )
         ),
+        "stage_status": stage_status,
+        "feature_audit": {
+            "captions_requested": bool(caption_settings.get("enabled", True)),
+            "dynamic_zoom_requested": bool(editing_settings.get("dynamic_zoom", True)),
+            "silence_removal_requested": bool(editing_settings.get("remove_silence", False)),
+            "audio_normalization_requested": bool(editing_settings.get("normalize_audio", editing_settings.get("audio_normalize", True))),
+            "reaction_selection_requested": bool(editing_settings.get("reaction_selection", True)),
+            "contextual_broll_requested": bool(editing_settings.get("contextual_broll", False)),
+            "visual_change_rhythm_requested": bool(editing_settings.get("visual_change_rhythm", True)),
+            "smart_subject_tracking": "face-aware crop when OpenCV and face detections are available; otherwise centered crop fallback",
+            "sequence_clip_count": sequence_report.get("clip_count", 0) if isinstance(sequence_report, dict) else 0,
+        },
         "pipeline_id": pipeline_id,
         "version": PIPELINE_VERSION,
 
