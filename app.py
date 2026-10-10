@@ -171,67 +171,74 @@ def create_v2_job(
     caption_settings,
     editing_settings,
 ):
-    job_id = f"v2_{uuid.uuid4().hex[:12]}"
+    # GitHub Contents API can return 409 when the worker commits another job
+    # at the same time. Retry with a fresh unique ID instead of failing the UI.
+    last_error = None
+    for attempt in range(1, 6):
+        job_id = f"v2_{uuid.uuid4().hex[:12]}"
+        job = {
+            "job_id": job_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "status": "queued",
+            "pipeline": "video",
+            "pipeline_version": "2.0",
+            "input_value": input_value,
+            "reference_url": input_value,
+            "duration": int(duration),
+            "max_clips": int(max_clips),
+            "caption_style": caption_style,
+            "caption_settings": caption_settings,
+            "editing_settings": editing_settings,
+        }
 
-    job = {
-        "job_id": job_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "status": "queued",
-        "pipeline": "video",
-        "pipeline_version": "2.0",
-        "input_value": input_value,
-        "reference_url": input_value,
-        "duration": int(duration),
-        "max_clips": int(max_clips),
-        "caption_style": caption_style,
-        "caption_settings": caption_settings,
-        "editing_settings": editing_settings,
-    }
+        url = f"https://api.github.com/repos/{REPO}/contents/jobs/{job_id}.json"
+        content = base64.b64encode(
+            json.dumps(job, indent=2, ensure_ascii=False).encode("utf-8")
+        ).decode("ascii")
+        payload = {
+            "message": f"queue V2 job {job_id}",
+            "content": content,
+        }
 
-    JOBS_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
+        try:
+            response = requests.put(
+                url,
+                headers=github_headers(),
+                json=payload,
+                timeout=30,
+            )
+            if response.status_code == 409:
+                last_error = RuntimeError(
+                    f"GitHub returned 409 Conflict while queuing {job_id}; "
+                    f"retry {attempt}/5. Response: {response.text[:500]}"
+                )
+                continue
+            response.raise_for_status()
+        except requests.RequestException as error:
+            response_text = ""
+            if getattr(error, "response", None) is not None:
+                response_text = error.response.text[:500]
+            if getattr(error, "response", None) is not None and error.response.status_code == 409:
+                last_error = error
+                continue
+            raise RuntimeError(
+                f"Could not queue V2 job ({type(error).__name__}): "
+                f"{response_text or str(error)}"
+            ) from error
+
+        # Persist the local copy only after GitHub confirms the job exists.
+        JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        local_path = JOBS_DIR / f"{job_id}.json"
+        local_path.write_text(
+            json.dumps(job, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return job_id, local_path
+
+    raise RuntimeError(
+        "GitHub kept returning 409 Conflict after 5 attempts. "
+        "No local queued job was written. " + str(last_error)
     )
-
-    local_path = JOBS_DIR / f"{job_id}.json"
-
-    local_path.write_text(
-        json.dumps(
-            job,
-            indent=2,
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-
-    url = (
-        f"https://api.github.com/repos/"
-        f"{REPO}/contents/jobs/{job_id}.json"
-    )
-
-    content = base64.b64encode(
-        json.dumps(
-            job,
-            indent=2,
-            ensure_ascii=False,
-        ).encode()
-    ).decode()
-
-    payload = {
-        "message": f"queue V2 job {job_id}",
-        "content": content,
-    }
-
-    response = requests.put(
-        url,
-        headers=github_headers(),
-        json=payload,
-        timeout=30,
-    )
-
-    response.raise_for_status()
-
-    return job_id, local_path
 
 
 # ============================================================
