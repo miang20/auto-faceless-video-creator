@@ -628,11 +628,91 @@ def _caption_filter(
     return parts[0] + "=" + ":".join(parts[1:])
 
 
+def _detect_face_subject_track(
+    input_path: str,
+    start: float,
+    duration: float,
+    source_width: int,
+    source_height: int,
+    output_width: int,
+    output_height: int,
+) -> List[Tuple[float, float]]:
+    """Sample face centers and convert them into horizontal crop positions.
+
+    OpenCV is optional so the renderer remains usable on minimal Termux builds.
+    If it is absent or no face is found, callers safely retain center cropping.
+    """
+    if source_width <= 0 or source_height <= 0 or source_width / source_height <= output_width / output_height:
+        return []
+    try:
+        import cv2
+    except Exception:
+        print("[V2 TRACKING] OpenCV unavailable; using centered crop.")
+        return []
+
+    try:
+        cascade_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+        detector = cv2.CascadeClassifier(cascade_path)
+        if detector.empty():
+            print("[V2 TRACKING] Face detector unavailable; using centered crop.")
+            return []
+        capture = cv2.VideoCapture(input_path)
+        if not capture.isOpened():
+            return []
+        scaled_width = int(round(source_width * output_height / source_height))
+        max_x = max(0.0, float(scaled_width - output_width))
+        sample_times = []
+        t = 0.0
+        while t < max(0.01, duration):
+            sample_times.append(round(t, 3))
+            t += 0.5
+        if not sample_times or sample_times[-1] < duration:
+            sample_times.append(round(max(0.0, duration - 0.03), 3))
+        track = []
+        last_x = max_x / 2.0
+        for relative_time in sorted(set(sample_times)):
+            capture.set(cv2.CAP_PROP_POS_MSEC, max(0.0, start + relative_time) * 1000.0)
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = detector.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=4,
+                minSize=(max(24, source_width // 30), max(24, source_height // 30)),
+            )
+            if len(faces):
+                x, y, w, h = max(faces, key=lambda item: int(item[2]) * int(item[3]))
+                face_center_scaled = (float(x) + float(w) / 2.0) * scaled_width / source_width
+                last_x = min(max(face_center_scaled - output_width / 2.0, 0.0), max_x)
+            track.append((relative_time, round(last_x, 2)))
+        capture.release()
+        # Require at least two real samples and measurable movement; otherwise
+        # a static center crop is less distracting than fake tracking.
+        if len(track) < 2 or max(x for _, x in track) - min(x for _, x in track) < 12:
+            return []
+        return track
+    except Exception as tracking_error:
+        print("[V2 TRACKING] Face tracking failed; using centered crop:", str(tracking_error)[:160])
+        return []
+
+
+def _subject_crop_expression(track: List[Tuple[float, float]]) -> str:
+    if not track:
+        return "(iw-ow)/2"
+    expression = f"{track[-1][1]:.2f}"
+    for index in range(len(track) - 2, -1, -1):
+        next_time = track[index + 1][0]
+        x_value = track[index][1]
+        expression = f"if(lt(t\\,{next_time:.3f})\\,{x_value:.2f}\\,{expression})"
+    return expression
+
+
 def _vertical_crop_filter(
     width: int,
     height: int,
     output_width: int,
     output_height: int,
+    subject_track: Optional[List[Tuple[float, float]]] = None,
 ) -> str:
 
     if width <= 0 or height <= 0:
@@ -646,10 +726,12 @@ def _vertical_crop_filter(
     target_ratio = output_width / output_height
 
     if source_ratio > target_ratio:
-        # Source is wider. Crop left/right.
+        # Source is wider. Follow detected face centers when a useful track exists.
+        # The crop expression is time-aware; missing/flat tracks remain centered.
+        crop_x = _subject_crop_expression(subject_track or [])
         return (
             f"scale=-2:{output_height},"
-            f"crop={output_width}:{output_height}"
+            f"crop={output_width}:{output_height}:x='{crop_x}':y=0"
         )
 
     return (
@@ -693,6 +775,7 @@ def _build_video_filter(
     caption_settings: Optional[Dict[str, Any]] = None,
     caption_text: str = "",
     caption_text_dir: Optional[str] = None,
+    subject_track: Optional[List[Tuple[float, float]]] = None,
 ) -> str:
 
     filters = []
@@ -703,6 +786,7 @@ def _build_video_filter(
             height,
             output_width,
             output_height,
+            subject_track=subject_track,
         )
     )
 
@@ -813,6 +897,18 @@ def _render_single_segment(
     ):
         caption_text_dir = tempfile.mkdtemp(prefix="v2-caption-")
 
+    subject_track = []
+    if bool(editing_settings.get("smart_subject_tracking", True)):
+        subject_track = _detect_face_subject_track(
+            input_path=segment_input_path,
+            start=start,
+            duration=duration,
+            source_width=width,
+            source_height=height,
+            output_width=output_width,
+            output_height=output_height,
+        )
+
     video_filter = _build_video_filter(
         width,
         height,
@@ -823,6 +919,7 @@ def _render_single_segment(
         caption_settings,
         caption_text=_clean_text(clip.get("text", "")),
         caption_text_dir=caption_text_dir,
+        subject_track=subject_track,
     )
 
     command = [
