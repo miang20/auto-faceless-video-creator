@@ -424,7 +424,7 @@ def _dynamic_caption_filters(
             text_path = os.path.join(textfile_dir, f"caption_{textfile_index:04d}.txt")
             textfile_index += 1
             with open(text_path, "w", encoding="utf-8", newline="") as text_handle:
-                text_handle.write(str(label).replace("\\r", " ").replace("\\n", " ").replace("\r", " ").replace("\n", " "))
+                text_handle.write(str(label).replace("\\r", " ").replace("\n", " ").replace("\r", " ").replace("\n", " "))
             text_option = f"textfile='{text_path}':expansion=none"
         else:
             text_option = f"text='{_escape_drawtext(label)}'"
@@ -1008,7 +1008,7 @@ def _render_single_segment(
             if caption_text_dir:
                 raise RuntimeError(
                     "FFmpeg rejected textfile-based captions; refusing to "
-                    "complete the job without required captions.\\n"
+                    "complete the job without required captions.\n"
                     + stderr_text[-4000:]
                 )
             print("[V2 RENDER] Inline caption parser rejected text; retrying without captions.")
@@ -1048,7 +1048,7 @@ def _render_single_segment(
             )
 
         raise RuntimeError(
-            "FFmpeg failed while rendering segment:\\n"
+            "FFmpeg failed while rendering segment:\n"
             + stderr_text[-4000:]
         )
 
