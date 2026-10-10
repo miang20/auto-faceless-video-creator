@@ -575,157 +575,187 @@ if st.button(
 
 
 # ============================================================
-# JOB MONITOR
+# LIVE JOB MONITOR + COMPLETION POPUP + DOWNLOAD
 # ============================================================
 
-st.divider()
-st.header("📊 V2 Jobs")
+def _resolve_job_video(job):
+    """Resolve this completed job's MP4 from its result manifest first."""
+    result_path = str(job.get("result_path") or "").strip()
+    if result_path:
+        manifest = Path(result_path).expanduser()
+        if not manifest.is_absolute():
+            manifest = Path.cwd() / manifest
+        if manifest.is_file():
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+                found = []
 
-try:
-    jobs = github_jobs()
+                def walk(value, preferred=False):
+                    if isinstance(value, dict):
+                        for key, item in value.items():
+                            key_preferred = any(
+                                token in str(key).lower()
+                                for token in ("output_path", "final_video", "video_path", "rendered_path")
+                            )
+                            walk(item, preferred or key_preferred)
+                    elif isinstance(value, list):
+                        for item in value:
+                            walk(item, preferred)
+                    elif isinstance(value, str) and value.lower().endswith(".mp4"):
+                        candidate = Path(value).expanduser()
+                        if not candidate.is_absolute():
+                            candidate = Path.cwd() / candidate
+                        if candidate.is_file() and candidate.stat().st_size > 0:
+                            found.append((preferred, candidate))
+
+                walk(payload)
+                if found:
+                    found.sort(key=lambda item: (item[0], item[1].stat().st_mtime), reverse=True)
+                    return found[0][1]
+            except Exception:
+                pass
+
+    # Phone export and output-folder lookup are the safe fallback when the
+    # worker's manifest path is absolute but no longer directly accessible.
+    videos = completed_videos()
+    if not videos:
+        return None
+    job_id = str(job.get("job_id") or "")
+    matching = [video for video in videos if job_id and job_id in video.name]
+    if matching:
+        return matching[0]
+    return videos[0]
+
+
+def _render_video_card(video, prefix="video"):
+    st.markdown(f"**{video.name}**")
+    size_mb = video.stat().st_size / (1024 * 1024)
+    st.caption(f"{size_mb:.1f} MB • {video.parent}")
+    with open(video, "rb") as file:
+        video_bytes = file.read()
+    st.video(video_bytes)
+    st.download_button(
+        label="⬇️ DOWNLOAD VIDEO",
+        data=video_bytes,
+        file_name=video.name,
+        mime="video/mp4",
+        use_container_width=True,
+        key=f"{prefix}_download_{video}",
+    )
+    if st.button(
+        "📱 Send to Google Photos / Android Media",
+        key=f"{prefix}_photos_{video}",
+        use_container_width=True,
+    ):
+        try:
+            target = import_to_photos(video)
+            st.success(f"Saved to Android DCIM: {target.name}")
+            st.info("Android media scan request sent.")
+        except Exception as error:
+            st.error(f"Phone media copy failed: {error}")
+
+
+if hasattr(st, "dialog"):
+    @st.dialog("✅ Your V2 video is ready", width="large")
+    def _show_video_ready(video_path):
+        video = Path(video_path)
+        if not video.is_file() or video.stat().st_size <= 0:
+            st.warning("Job completed, but the MP4 is not accessible in this app session yet.")
+            st.caption("Use Refresh Dashboard or wait for the next automatic refresh.")
+            return
+        st.success("Render complete. Your video is ready to preview and download.")
+        _render_video_card(video, prefix="popup")
+else:
+    def _show_video_ready(video_path):
+        st.success(f"Your V2 video is ready: {Path(video_path).name}")
+
+
+def _render_live_dashboard():
+    st.divider()
+    st.header("📊 V2 Jobs")
+    st.caption("Live status refreshes automatically while this dashboard is open.")
+
+    try:
+        jobs = github_jobs()
+    except Exception as error:
+        jobs = []
+        st.warning(f"Could not load GitHub jobs: {error}")
 
     if not jobs:
-        st.info("No V2 jobs found.")
-
+        st.info("No V2 jobs found yet.")
     else:
-        # V2 LATEST-ONLY UI: show only the newest job
-        job = jobs[0]
-        for job in [job]:
-
-            status = str(
-                job.get("status", "unknown")
-            ).lower()
-
-            job_id = job.get(
-                "job_id",
-                "unknown",
-            )
+        for job in jobs[:5]:
+            status = str(job.get("status", "unknown")).lower()
+            job_id = str(job.get("job_id", "unknown"))
+            icon = {
+                "completed": "✅",
+                "running": "🟡",
+                "processing": "🟡",
+                "downloading": "🔵",
+                "failed": "❌",
+                "queued": "⏳",
+            }.get(status, "⚪")
+            with st.container(border=True):
+                left, right = st.columns([4, 1])
+                with left:
+                    st.markdown(f"### {icon} `{job_id}`")
+                    st.caption(f"Status: **{status.upper()}**")
+                    if job.get("input_value"):
+                        st.caption(str(job["input_value"]))
+                    if job.get("error"):
+                        st.error(str(job["error"]))
+                    if status == "completed":
+                        result_video = _resolve_job_video(job)
+                        if result_video:
+                            with open(result_video, "rb") as handle:
+                                data = handle.read()
+                            st.download_button(
+                                "⬇️ DOWNLOAD THIS JOB",
+                                data=data,
+                                file_name=result_video.name,
+                                mime="video/mp4",
+                                key=f"job_download_{job_id}",
+                                use_container_width=True,
+                            )
+                        else:
+                            st.warning("Job says completed, but its MP4 could not be located yet.")
+                with right:
+                    st.metric("Duration", f'{job.get("duration", 0)}s')
 
             if status == "completed":
-                icon = "✅"
-            elif status == "running":
-                icon = "🟡"
-            elif status == "failed":
-                icon = "❌"
-            elif status == "queued":
-                icon = "⏳"
-            else:
-                icon = "⚪"
+                notified = st.session_state.setdefault("v2_notified_completed", [])
+                if job_id not in notified:
+                    video = _resolve_job_video(job)
+                    # Mark before opening the dialog so its own rerun cannot
+                    # repeatedly reopen the same completion popup.
+                    notified.append(job_id)
+                    st.session_state["v2_notified_completed"] = notified[-100:]
+                    if video:
+                        _show_video_ready(str(video))
 
-            with st.container(border=True):
-
-                left, right = st.columns(
-                    [4, 1]
-                )
-
-                with left:
-                    st.markdown(
-                        f"### {icon} `{job_id}`"
-                    )
-
-                    st.caption(
-                        f"Status: **{status.upper()}**"
-                    )
-
-                    source = job.get(
-                        "input_value",
-                        "",
-                    )
-
-                    if source:
-                        st.caption(source)
-
-                    if job.get("error"):
-                        st.error(
-                            job["error"]
-                        )
-
-                with right:
-                    st.metric(
-                        "Duration",
-                        f'{job.get("duration", 0)}s',
-                    )
+    st.divider()
+    st.header("🎥 Final Videos")
+    videos = completed_videos()
+    if not videos:
+        st.info("No completed videos found yet. When V2 finishes, the MP4 will appear here automatically.")
+    else:
+        for video in videos[:10]:
+            try:
+                with st.container(border=True):
+                    _render_video_card(video, prefix="gallery")
+            except Exception as error:
+                st.error(f"Could not load {video.name}: {error}")
 
 
-except Exception as error:
-    st.warning(
-        f"Could not load GitHub jobs: {error}"
-    )
+if hasattr(st, "fragment"):
+    @st.fragment(run_every="8s")
+    def _live_dashboard_fragment():
+        _render_live_dashboard()
 
-
-# ============================================================
-# FINAL VIDEOS
-# ============================================================
-
-st.divider()
-st.header("🎥 Final Videos")
-
-videos = completed_videos()
-
-if not videos:
-    st.info(
-        "No completed videos yet. "
-        "When V2 finishes, the final MP4 will appear here."
-    )
-
+    _live_dashboard_fragment()
 else:
-
-    for video in videos[:10]:
-
-        st.markdown(
-            f"**{video.name}**"
-        )
-
-        try:
-            size_mb = video.stat().st_size / (
-                1024 * 1024
-            )
-
-            st.caption(
-                f"{size_mb:.1f} MB • {video.parent}"
-            )
-
-            with open(video, "rb") as file:
-                video_bytes = file.read()
-
-            st.video(
-                video_bytes
-            )
-
-            st.download_button(
-                label="⬇️ DOWNLOAD VIDEO",
-                data=video_bytes,
-                file_name=video.name,
-                mime="video/mp4",
-                use_container_width=True,
-                key=f"download_{video}",
-            )
-
-            if st.button(
-                "📱 Send to Google Photos / Android Media",
-                key=f"photos_{video}",
-                use_container_width=True,
-            ):
-                try:
-                    target = import_to_photos(video)
-
-                    st.success(
-                        f"Saved to Android DCIM: {target.name}"
-                    )
-
-                    st.info(
-                        "Google Photos ko media scan request bhej di gayi hai."
-                    )
-
-                except Exception as error:
-                    st.error(
-                        f"Phone media copy failed: {error}"
-                    )
-
-        except Exception as error:
-            st.error(
-                f"Could not load {video.name}: {error}"
-            )
+    st.info("Automatic refresh is unavailable in this Streamlit version. Tap Refresh Dashboard to check job completion.")
+    _render_live_dashboard()
 
 
 # ============================================================
@@ -733,9 +763,4 @@ else:
 # ============================================================
 
 st.divider()
-
-st.caption(
-    "Auto Faceless Studio V2 • "
-    "Worker-based GitHub pipeline • "
-    "Vertical video output"
-)
+st.caption("Auto Faceless Studio V2 • Automatic job monitor • Final MP4 preview/download • Android media export")
