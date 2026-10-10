@@ -379,6 +379,7 @@ def _dynamic_caption_filters(
     text: str,
     duration: float,
     caption_settings: Dict[str, Any],
+    textfile_dir: Optional[str] = None,
 ) -> List[str]:
     """Create timed 1-3 word captions with a yellow active-word overlay."""
     if not text or caption_settings.get("enabled", True) is False:
@@ -415,11 +416,25 @@ def _dynamic_caption_filters(
     word_step = duration / len(words)
     filters: List[str] = []
 
+    os.makedirs(textfile_dir, exist_ok=True) if textfile_dir else None
+    textfile_index = 0
+
     def drawtext(label: str, color: str, x_expr: str, start: float, end: float) -> str:
+        nonlocal textfile_index
+        if textfile_dir:
+            # Keep arbitrary caption characters out of the filtergraph parser.
+            # FFmpeg explicitly recommends textfile for complex text escaping.
+            text_path = os.path.join(textfile_dir, f"caption_{textfile_index:04d}.txt")
+            textfile_index += 1
+            with open(text_path, "w", encoding="utf-8", newline="") as text_handle:
+                text_handle.write(str(label).replace("\\r", " ").replace("\\n", " "))
+            text_option = f"textfile={text_path}:expansion=none"
+        else:
+            text_option = f"text='{_escape_drawtext(label)}'"
         parts = [
             "drawtext",
             font_option,
-            f"text='{_escape_drawtext(label)}'",
+            text_option,
             f"fontsize={font_size}",
             f"fontcolor={color}",
             f"x={x_expr}",
@@ -680,6 +695,7 @@ def _build_video_filter(
     editing_settings: Dict[str, Any],
     caption_settings: Optional[Dict[str, Any]] = None,
     caption_text: str = "",
+    caption_text_dir: Optional[str] = None,
 ) -> str:
 
     filters = []
@@ -721,6 +737,7 @@ def _build_video_filter(
                 caption_text,
                 duration,
                 caption_settings,
+                textfile_dir=caption_text_dir,
             )
         )
 
@@ -791,6 +808,14 @@ def _render_single_segment(
     silences = _detect_internal_silence(segment_input_path, start, duration) if remove_silence else []
     effective_duration = max(0.1, duration - sum(end - begin for begin, end in silences))
 
+    caption_text_dir = None
+    if (
+        caption_settings
+        and caption_settings.get("enabled", True) is not False
+        and _clean_text(clip.get("text", ""))
+    ):
+        caption_text_dir = tempfile.mkdtemp(prefix="v2-caption-")
+
     video_filter = _build_video_filter(
         width,
         height,
@@ -800,6 +825,7 @@ def _render_single_segment(
         editing_settings,
         caption_settings,
         caption_text=_clean_text(clip.get("text", "")),
+        caption_text_dir=caption_text_dir,
     )
 
     command = [
@@ -849,10 +875,22 @@ def _render_single_segment(
         ]
     )
 
-    result = _run_command(
-        command,
-        timeout=900,
-    )
+    try:
+        result = _run_command(
+            command,
+            timeout=900,
+        )
+    except Exception:
+        if caption_text_dir:
+            shutil.rmtree(caption_text_dir, ignore_errors=True)
+        raise
+    finally:
+        # FFmpeg has consumed all text files once the subprocess exits.
+        # On failure, the retry builds a fresh set of files.
+        pass
+
+    if caption_text_dir:
+        shutil.rmtree(caption_text_dir, ignore_errors=True)
 
     if result.returncode != 0:
         stderr_text = result.stderr or ""
