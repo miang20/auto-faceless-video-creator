@@ -551,44 +551,32 @@ def run_video_pipeline(
             continue
         if end <= start:
             continue
+        source_duration = end - start
+        budget = item.get("target_screen_duration")
+        try:
+            budget = float(budget) if budget is not None else source_duration
+        except (TypeError, ValueError):
+            budget = source_duration
+        budget = max(0.1, min(source_duration, budget))
+        role = str(item.get("role") or item.get("story_role") or "MAIN").upper()
+        # Trim within each chosen beat instead of proportionally mutating source
+        # timestamps. For payoff/ending, retain the tail of the source window.
+        if source_duration > budget + 0.01 and role in {"PAYOFF", "ENDING"}:
+            start = end - budget
+        else:
+            end = start + budget
         story_timeline.append({
             "start": start,
             "end": end,
             "duration": end - start,
             "text": str(item.get("text") or ""),
-            "role": str(item.get("role") or "MAIN"),
+            "role": role,
             "score": item.get("score", 0),
         })
     if story_timeline:
-        # Prefer granular story beats over a broad interval that contains
-        # several smaller beats (e.g. a full ending range plus setup/payoff).
-        # Otherwise the renderer's overlap guard drops the useful inner beats.
-        granular_timeline = []
-        for item in story_timeline:
-            contained = sum(
-                1 for other in story_timeline
-                if other is not item
-                and other["start"] >= item["start"]
-                and other["end"] <= item["end"]
-                and (other["start"] > item["start"] or other["end"] < item["end"])
-            )
-            if contained >= 2:
-                continue
-            granular_timeline.append(item)
-        story_timeline = sorted(
-            granular_timeline,
-            key=lambda item: (item["start"], item["end"]),
-        )
-        # Fit all retained beats into the requested duration without dropping
-        # the payoff at the tail. Scale each source window proportionally so
-        # the render does not simply trim the final beat off the timeline.
-        requested_seconds = max(0.0, float(duration or 0))
-        source_total = sum(max(0.0, item["end"] - item["start"]) for item in story_timeline)
-        if requested_seconds > 0 and source_total > requested_seconds and source_total > 0:
-            scale = requested_seconds / source_total
-            for item in story_timeline:
-                item["end"] = item["start"] + (item["end"] - item["start"]) * scale
-                item["duration"] = item["end"] - item["start"]
+        # Keep the script generator's narrative order. Clip analysis already
+        # selects non-overlapping source windows; never sort back to source order
+        # or scale timestamps independently, both of which break the edit.
         render_analysis = {
             "sequence": story_timeline,
             "story_blueprint": script,
