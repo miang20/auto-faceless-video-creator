@@ -579,6 +579,16 @@ def run_video_pipeline(
             granular_timeline,
             key=lambda item: (item["start"], item["end"]),
         )
+        # Fit all retained beats into the requested duration without dropping
+        # the payoff at the tail. Scale each source window proportionally so
+        # the render does not simply trim the final beat off the timeline.
+        requested_seconds = max(0.0, float(duration or 0))
+        source_total = sum(max(0.0, item["end"] - item["start"]) for item in story_timeline)
+        if requested_seconds > 0 and source_total > requested_seconds and source_total > 0:
+            scale = requested_seconds / source_total
+            for item in story_timeline:
+                item["end"] = item["start"] + (item["end"] - item["start"]) * scale
+                item["duration"] = item["end"] - item["start"]
         render_analysis = {
             "sequence": story_timeline,
             "story_blueprint": script,
