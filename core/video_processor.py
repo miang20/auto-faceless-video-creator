@@ -927,7 +927,7 @@ def _render_single_segment(
     # must use drawtext=option:value, never drawtext:option:value. Normalize
     # that exact malformed prefix before either -vf or -filter_complex uses it.
     video_filter = re.sub(
-        r"(?<![A-Za-z0-9_])drawtext\\s*:",
+        r"(?<![A-Za-z0-9_])drawtext\s*:",
         "drawtext=",
         video_filter,
         flags=re.IGNORECASE,
