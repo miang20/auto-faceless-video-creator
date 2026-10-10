@@ -22,6 +22,21 @@ class StoryPipelineContractTests(unittest.TestCase):
         self.assertEqual(roles[:5], ["HOOK", "SETUP", "ESCALATION", "REACTION", "PAYOFF"])
         self.assertAlmostEqual(sum(item["target_screen_duration"] for item in result["timeline"]), 30.0, places=1)
 
+    def test_duration_budget_covers_more_than_six_beats(self):
+        clips = [
+            {"start": index * 5, "end": index * 5 + 4, "duration": 4,
+             "text": f"beat {index}", "score": 0.5 + index / 100,
+             "hook_score": 1.0 if index == 7 else 0.1,
+             "story_role": ["HOOK", "SETUP", "ESCALATION", "REACTION",
+                            "PAYOFF", "ENDING", "ESCALATION", "PAYOFF"][index]}
+            for index in range(8)
+        ]
+        result = generate_script(clips, target_duration=30)
+        budgets = [item["target_screen_duration"] for item in result["timeline"]]
+        self.assertEqual(len(budgets), len(result["timeline"]))
+        self.assertEqual(len(budgets), 8)
+        self.assertAlmostEqual(sum(budgets), 30.0, places=1)
+
     def test_clip_selection_never_keeps_overlapping_windows(self):
         candidates = [
             {"start": 10, "end": 20, "score": 0.9},
