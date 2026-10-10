@@ -241,7 +241,7 @@ def run_video_processing(
         timeline.append({
             "path": clip_path, "start": start, "end": end,
             "duration": end - start,
-            "text": str(clip.get("text") or clip.get("caption") or clip.get("caption_text") or ""),
+            "text": str(clip.get("text") or clip.get("caption") or clip.get("caption_text") or clip.get("beat_text") or clip.get("transcript") or ""),
             "role": clip.get("role", clip.get("story_role", "")),
             "score": clip.get("score", clip.get("final_score", 0)),
         })
