@@ -16,7 +16,7 @@ def test_dynamic_captions_are_timed_and_word_highlighted():
     )
     assert filters
     assert any("fontcolor=yellow" in item for item in filters)
-    assert any("enable='between(t\\," in item for item in filters)
+    assert any("enable='between(t," in item for item in filters)
 
 
 def test_caption_toggle_disables_dynamic_text():
