@@ -641,6 +641,7 @@ def run_video_pipeline(
                 candidate_report,
                 target_duration=duration or 30,
                 editing_settings=editing_settings,
+                max_clips=max_clips,
             )
 
             if sequence_report.get("success") and sequence_report.get("sequence"):
