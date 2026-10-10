@@ -538,6 +538,7 @@ def run_video_pipeline(
                 profile,
                 candidate_report,
                 target_duration=duration or 30,
+                editing_settings=editing_settings,
             )
 
             if sequence_report.get("success") and sequence_report.get("sequence"):
