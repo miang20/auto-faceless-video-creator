@@ -348,16 +348,107 @@ def _caption_position(
         "bottom",
         "bottom center",
         "lower",
+        "lower-third",
+        "lower third",
+        "viral",
+        "center",
     }:
         return (
             "(w-text_w)/2",
-            "h*0.78",
+            "h*0.64",
         )
 
     return (
         "(w-text_w)/2",
-        "(h-text_h)/2",
+        "h*0.64",
     )
+
+
+def _ffmpeg_caption_color(value: Any, fallback: str) -> str:
+    color = _clean_text(value) or fallback
+    if re.fullmatch(r"#?[0-9a-fA-F]{6}", color):
+        return "0x" + color.lstrip("#")
+    return color
+
+
+def _dynamic_caption_filters(
+    text: str,
+    duration: float,
+    caption_settings: Dict[str, Any],
+) -> List[str]:
+    """Create timed 1-3 word captions with a yellow active-word overlay."""
+    if not text or caption_settings.get("enabled", True) is False:
+        return []
+
+    words = _clean_text(text).split()
+    if not words:
+        return []
+
+    font_size = max(24, min(110, _safe_int(caption_settings.get("font_size", 58), 58)))
+    style = _clean_text(caption_settings.get("style", "Bold Viral")).lower()
+    if style == "impact":
+        font_size = max(font_size, 64)
+
+    stroke = bool(caption_settings.get("stroke", True))
+    shadow = bool(caption_settings.get("shadow", True))
+    box = bool(caption_settings.get("box", caption_settings.get("background_box", False)))
+    if style == "clean":
+        stroke = False
+        shadow = False
+
+    normal_color = _ffmpeg_caption_color(caption_settings.get("text_color", "white"), "white")
+    active_color = _ffmpeg_caption_color(caption_settings.get("highlight_color", "yellow"), "yellow")
+    font = _find_font_file(caption_settings.get("font", ""))
+    font_option = f"fontfile='{_escape_drawtext(font)}'" if font else "font='DejaVu Sans'"
+    _, y = _caption_position(caption_settings.get("position", "lower-third"))
+    duration = max(0.1, _safe_float(duration, 0.1))
+    word_step = duration / len(words)
+    filters: List[str] = []
+
+    def drawtext(label: str, color: str, x_expr: str, start: float, end: float) -> str:
+        parts = [
+            "drawtext",
+            font_option,
+            f"text='{_escape_drawtext(label)}'",
+            f"fontsize={font_size}",
+            f"fontcolor={color}",
+            f"x={x_expr}",
+            f"y={y}",
+        ]
+        if stroke:
+            parts.extend(["borderw=3", "bordercolor=black"])
+        if shadow:
+            parts.extend(["shadowx=2", "shadowy=2", "shadowcolor=black@0.65"])
+        if box:
+            parts.extend(["box=1", "boxcolor=black@0.55", "boxborderw=10"])
+        parts.append(f"enable='between(t\\,{start:.3f}\\,{end:.3f})'")
+        return "=".join(parts[:1]) + "=" + ":".join(parts[1:])
+
+    # Group up to three words together. A yellow overlay advances word by word.
+    for group_start in range(0, len(words), 3):
+        group = words[group_start:group_start + 3]
+        first_index = group_start
+        last_index = group_start + len(group)
+        group_start_time = first_index * word_step
+        group_end_time = min(duration, last_index * word_step)
+        phrase = " ".join(group)
+
+        # Approximate text width so the active word overlays its place in the phrase.
+        phrase_width = sum(max(1, len(word)) * font_size * 0.54 for word in group)
+        phrase_width += max(0, len(group) - 1) * font_size * 0.32
+        phrase_x = f"(w-{phrase_width:.1f})/2"
+        filters.append(drawtext(phrase, normal_color, phrase_x, group_start_time, group_end_time))
+
+        prefix_width = 0.0
+        for offset, word in enumerate(group):
+            word_index = group_start + offset
+            word_start = word_index * word_step
+            word_end = min(duration, (word_index + 1) * word_step)
+            word_x = f"(w-{phrase_width:.1f})/2+{prefix_width:.1f}"
+            filters.append(drawtext(word, active_color, word_x, word_start, word_end))
+            prefix_width += max(1, len(word)) * font_size * 0.54 + font_size * 0.32
+
+    return filters
 
 
 def _caption_filter(
@@ -578,6 +669,7 @@ def _build_video_filter(
     duration: float,
     editing_settings: Dict[str, Any],
     caption_settings: Optional[Dict[str, Any]] = None,
+    caption_text: str = "",
 ) -> str:
 
     filters = []
@@ -606,20 +698,21 @@ def _build_video_filter(
     )
 
     if dynamic_zoom and punch_in:
-        # Keep this subtle. The crop itself provides the primary framing.
+        # Actual slow punch-in; output stays 1080x1920 at a fixed 30 fps.
         filters.append(
-            "scale=1080:1920"
+            "zoompan=z='min(zoom+0.0008,1.08)':d=1:"
+            "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            "s=1080x1920:fps=30"
         )
 
-    if caption_settings:
-        caption = _caption_filter(
-            caption_settings
-        )
-
-        if caption:
-            filters.append(
-                caption
+    if caption_settings and caption_text:
+        filters.extend(
+            _dynamic_caption_filters(
+                caption_text,
+                duration,
+                caption_settings,
             )
+        )
 
     return ",".join(filters)
 
@@ -658,6 +751,7 @@ def _render_single_segment(
         duration,
         editing_settings,
         caption_settings,
+        caption_text=_clean_text(clip.get("text", "")),
     )
 
     command = [
