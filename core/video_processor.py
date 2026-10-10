@@ -277,6 +277,10 @@ def _escape_drawtext(text: str) -> str:
         (":", r"\:"),
         ("'", r"\'"),
         ("%", r"\%"),
+        # Escape filtergraph separators too: punctuation must not split a
+        # drawtext expression and leave it without its required text option.
+        (",", r"\,"),
+        (";", r"\;"),
         ("[", r"\["),
         ("]", r"\]"),
     ]
