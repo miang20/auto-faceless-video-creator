@@ -262,7 +262,7 @@ def run_video_processing(
             analysis = clip_analysis.get("analysis", {})
             if isinstance(analysis, dict):
                 raw_clips = analysis.get("clips", []) or []
-    timeline, last_end_by_path = [], {}
+    timeline, ranges_by_path = [], {}
     for clip in raw_clips:
         if not isinstance(clip, dict):
             continue
@@ -287,7 +287,11 @@ def run_video_processing(
             continue
         if end <= start or not Path(clip_path).is_file():
             continue
-        if start < last_end_by_path.get(clip_path, -1.0):
+        # Reordered edits may legitimately jump backward in source time. Reject
+        # only genuinely overlapping source windows, not every earlier timestamp.
+        prior_ranges = ranges_by_path.setdefault(clip_path, [])
+        if any(start < prior_end - 0.02 and end > prior_start + 0.02
+               for prior_start, prior_end in prior_ranges):
             continue
         timeline.append({
             "path": clip_path, "start": start, "end": end,
@@ -296,7 +300,7 @@ def run_video_processing(
             "role": clip.get("role", clip.get("story_role", "")),
             "score": clip.get("score", clip.get("final_score", 0)),
         })
-        last_end_by_path[clip_path] = end
+        prior_ranges.append((start, end))
     print(f"[VIDEO PROCESSOR] Selected clips: {len(timeline)}")
     print(f"[VIDEO PROCESSOR] Distinct source files: {len({x['path'] for x in timeline})}")
     if not timeline:
