@@ -99,6 +99,43 @@ def _build_peak_moments(raw_beats) -> list[dict]:
 # RESEARCH
 # =========================================================
 
+def _apply_visual_change_rhythm(
+    timeline: list[dict],
+    enabled: bool = True,
+    max_segment_seconds: float = 4.0,
+) -> list[dict]:
+    """Split long selected windows into short, evenly sized visual beats."""
+    items = [dict(item) for item in (timeline or []) if isinstance(item, dict)]
+    if not enabled:
+        return items
+    try:
+        maximum = max(2.0, min(5.0, float(max_segment_seconds)))
+    except (TypeError, ValueError):
+        maximum = 4.0
+    result = []
+    for item in items:
+        try:
+            start, end = float(item["start"]), float(item["end"])
+        except (KeyError, TypeError, ValueError):
+            result.append(item)
+            continue
+        length = end - start
+        if length <= maximum + 0.01:
+            result.append(item)
+            continue
+        count = max(2, int(math.ceil(length / maximum)))
+        part_length = length / count
+        for index in range(count):
+            part_start = start + index * part_length
+            part_end = end if index == count - 1 else start + (index + 1) * part_length
+            part = dict(item)
+            part["start"] = round(part_start, 4)
+            part["end"] = round(part_end, 4)
+            part["duration"] = max(0.1, part_end - part_start)
+            result.append(part)
+    return result
+
+
 def run_research(
     topic: str,
     reference_url: Optional[str] = None,
@@ -303,33 +340,12 @@ def run_video_processing(
         })
         prior_ranges.append((start, end))
 
-    # Enforce a fast visual rhythm even when the analyzer returns long source
-    # windows. Split each selected window into evenly sized 2-4 second beats;
-    # never loop footage or alter source timestamps beyond the chosen window.
-    rhythm_enabled = bool((editing_settings or {}).get("visual_change_rhythm", True))
-    if rhythm_enabled:
-        max_visual_seconds = 4.0
-        rhythmic_timeline = []
-        for item in timeline:
-            clip_duration = float(item["end"]) - float(item["start"])
-            if clip_duration <= max_visual_seconds + 0.01:
-                rhythmic_timeline.append(item)
-                continue
-            parts = max(2, int(math.ceil(clip_duration / max_visual_seconds)))
-            part_duration = clip_duration / parts
-            for part_index in range(parts):
-                part_start = float(item["start"]) + part_index * part_duration
-                part_end = (
-                    float(item["end"])
-                    if part_index == parts - 1
-                    else float(item["start"]) + (part_index + 1) * part_duration
-                )
-                part = dict(item)
-                part["start"] = round(part_start, 4)
-                part["end"] = round(part_end, 4)
-                part["duration"] = max(0.1, part_end - part_start)
-                rhythmic_timeline.append(part)
-        timeline = rhythmic_timeline
+    # Keep visual changes in a 2-5 second window unless the selected moment is shorter.
+    timeline = _apply_visual_change_rhythm(
+        timeline,
+        enabled=bool((editing_settings or {}).get("visual_change_rhythm", True)),
+        max_segment_seconds=(editing_settings or {}).get("max_visual_segment_seconds", 4.0),
+    )
 
     print(f"[VIDEO PROCESSOR] Selected clips: {len(timeline)}")
     print(f"[VIDEO PROCESSOR] Distinct source files: {len({x['path'] for x in timeline})}")
