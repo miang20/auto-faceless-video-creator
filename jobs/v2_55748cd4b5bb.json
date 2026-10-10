@@ -1,0 +1,35 @@
+{
+  "job_id": "v2_55748cd4b5bb",
+  "created_at": "2026-10-10T23:15:40.569990+00:00",
+  "status": "queued",
+  "pipeline": "video",
+  "pipeline_version": "2.0",
+  "input_value": "https://youtube.com/shorts/Dnirz9mlPj8",
+  "reference_url": "https://youtube.com/shorts/Dnirz9mlPj8",
+  "duration": 30,
+  "max_clips": 10,
+  "caption_style": "Bold Viral",
+  "caption_settings": {
+    "enabled": true,
+    "font": "DejaVu Sans",
+    "font_size": 58,
+    "position": "lower-third",
+    "text_color": "white",
+    "highlight_color": "yellow",
+    "stroke": true,
+    "stroke_width": 3,
+    "shadow": true,
+    "background_box": true,
+    "box": true,
+    "words_per_line": 3,
+    "max_lines": 1
+  },
+  "editing_settings": {
+    "dynamic_zoom": true,
+    "remove_silence": true,
+    "normalize_audio": true,
+    "contextual_broll": true,
+    "reaction_selection": true,
+    "visual_change_rhythm": true
+  }
+}
