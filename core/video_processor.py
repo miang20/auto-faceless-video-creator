@@ -933,7 +933,7 @@ def _render_single_segment(
             f"between(t\\,{begin:.3f}\\,{end:.3f})"
             for begin, end in silences
         )
-        video_select = f"select='not({silence_expression})',setpts=N/(FRAME_RATE*TB)"
+        video_select = f"select='not({silence_expression})',setpts=N/({fps}*TB)"
         audio_select = f"aselect='not({silence_expression})',asetpts=N/SR/TB"
         audio_chain = audio_select
         if bool(editing_settings.get("audio_normalize", editing_settings.get("normalize_audio", True))):
