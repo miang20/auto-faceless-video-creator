@@ -133,3 +133,25 @@ def test_subject_tracking_builds_time_aware_crop_expression():
     graph = _vertical_crop_filter(1920, 1080, 1080, 1920, subject_track=track)
     assert "crop=1080:1920:x='" in graph
     assert "if(lt(t\\,0.500)" in graph
+
+def test_source_analysis_accepts_research_list(monkeypatch):
+    import core.pipeline as pipeline
+
+    captured = {}
+
+    def fake_report(topic, sources, reference_url=None):
+        captured["topic"] = topic
+        captured["sources"] = sources
+        captured["reference_url"] = reference_url
+        return {"success": True, "sources": sources, "source_count": len(sources)}
+
+    monkeypatch.setattr(pipeline, "build_analysis_report", fake_report)
+    source = {"url": "https://youtube.com/watch?v=example", "video_id": "example"}
+    report = pipeline.run_source_analysis(
+        topic="perfect timing",
+        research=[source],
+        reference_url=source["url"],
+    )
+    assert report["success"] is True
+    assert captured["sources"] == [source]
+    assert report["source_count"] == 1
