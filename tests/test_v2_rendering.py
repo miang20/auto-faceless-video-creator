@@ -92,3 +92,33 @@ def test_caption_textfiles_preserve_punctuation_without_inline_text(tmp_path):
     assert "It's" in saved
     assert "100%" in saved
     assert "really?" in saved
+
+def test_pipeline_builds_story_blueprint_from_clip_analysis():
+    from core.pipeline import run_script_generation
+
+    script = run_script_generation(
+        topic="perfect timing",
+        research={
+            "sources": [{
+                "url": "https://youtube.com/watch?v=example",
+                "title": "Perfect timing moment",
+            }],
+        },
+        clip_analysis={
+            "clips": [{
+                "start": 1.0,
+                "end": 4.0,
+                "duration": 3.0,
+                "text": "Wait what just happened",
+                "score": 0.95,
+                "role": "HOOK",
+            }],
+        },
+        target_duration=10,
+        caption_settings={"enabled": True},
+        editing_settings={"dynamic_zoom": True},
+    )
+    assert script["timeline"]
+    assert script["story_structure"]
+    assert script["visual_editing_plan"]["dynamic_zoom"] is True
+    assert script["context_sources"][0]["title"] == "Perfect timing moment"
