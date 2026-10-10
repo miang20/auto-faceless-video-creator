@@ -294,6 +294,16 @@ def _escape_drawtext(text: str) -> str:
     return text
 
 
+def _normalize_drawtext_filter(filter_text: str) -> str:
+    """Repair the known malformed drawtext: prefix before passing filters to FFmpeg."""
+    return re.sub(
+        r"(?<![A-Za-z0-9_])drawtext\s*:",
+        "drawtext=",
+        str(filter_text or ""),
+        flags=re.IGNORECASE,
+    )
+
+
 def _find_font_file(
     requested_font: str = "",
 ) -> Optional[str]:
@@ -923,15 +933,7 @@ def _render_single_segment(
         subject_track=subject_track,
     )
 
-    # Compatibility guard for older/local renderer variants: FFmpeg filters
-    # must use drawtext=option:value, never drawtext:option:value. Normalize
-    # that exact malformed prefix before either -vf or -filter_complex uses it.
-    video_filter = re.sub(
-        r"(?<![A-Za-z0-9_])drawtext\s*:",
-        "drawtext=",
-        video_filter,
-        flags=re.IGNORECASE,
-    )
+    video_filter = _normalize_drawtext_filter(video_filter)
 
     command = [
         "ffmpeg", "-y", "-ss", f"{start:.3f}",
