@@ -195,10 +195,11 @@ def run_video_processing(
     caption_settings: Optional[dict] = None,
     editing_settings: Optional[dict] = None,
 ) -> dict:
+    """Render selected clips using the renderer's actual API."""
     source_path = str(video_path)
-    output_path = Path(output_dir) / f"final_{Path(source_path).stem}.mp4"
-
-    # Prefer an assembled sequence when one is supplied.
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"final_{Path(source_path).stem}.mp4"
     raw_clips = []
     if isinstance(clip_analysis, dict):
         for key in ("sequence", "clips"):
@@ -206,87 +207,72 @@ def run_video_processing(
             if isinstance(value, list) and value:
                 raw_clips = value
                 break
-
         if not raw_clips:
             analysis = clip_analysis.get("analysis", {})
             if isinstance(analysis, dict):
                 raw_clips = analysis.get("clips", []) or []
-
-    timeline = []
-    last_end_by_path = {}
-
+    timeline, last_end_by_path = [], {}
     for clip in raw_clips:
         if not isinstance(clip, dict):
             continue
-
-        # local_path identifies a previously downloaded/cropped section.
         local_section = clip.get("local_path")
-        clip_path = str(
-            local_section
-            or clip.get("path")
-            or clip.get("file_path")
-            or clip.get("file")
-            or source_path
-        )
-
+        clip_path = str(local_section or clip.get("path") or clip.get("file_path") or clip.get("file") or source_path)
         if local_section:
             start = clip.get("local_start", 0)
             end = clip.get("local_end")
             if end is None:
                 end = clip.get("duration")
-                if end is None:
-                    original_start = clip.get("start", clip.get("start_time", 0))
-                    original_end = clip.get("end", clip.get("end_time"))
-                    try:
-                        end = float(original_end) - float(original_start)
-                    except (TypeError, ValueError):
-                        continue
+            if end is None:
+                try:
+                    end = float(clip.get("end", clip.get("end_time"))) - float(clip.get("start", clip.get("start_time", 0)))
+                except (TypeError, ValueError):
+                    continue
         else:
             start = clip.get("start", clip.get("start_time", 0))
             end = clip.get("end", clip.get("end_time"))
-
         try:
-            start = max(0.0, float(start))
-            end = float(end)
+            start, end = max(0.0, float(start)), float(end)
         except (TypeError, ValueError):
             continue
-
-        if end <= start:
+        if end <= start or not Path(clip_path).is_file():
             continue
-
-        # Prevent overlapping cuts from the same file, but keep the
-        # chosen sequence order and allow cuts from different files.
         if start < last_end_by_path.get(clip_path, -1.0):
             continue
-
         timeline.append({
-            "path": clip_path,
-            "start": start,
-            "end": end,
-            "text": str(
-                clip.get("text")
-                or clip.get("caption")
-                or clip.get("caption_text")
-                or ""
-            ),
-            "role": clip.get("role", ""),
+            "path": clip_path, "start": start, "end": end,
+            "duration": end - start,
+            "text": str(clip.get("text") or clip.get("caption") or clip.get("caption_text") or ""),
+            "role": clip.get("role", clip.get("story_role", "")),
+            "score": clip.get("score", clip.get("final_score", 0)),
         })
         last_end_by_path[clip_path] = end
-
     print(f"[VIDEO PROCESSOR] Selected clips: {len(timeline)}")
-    print(
-        "[VIDEO PROCESSOR] Distinct source files: "
-        f"{len({item['path'] for item in timeline})}"
+    print(f"[VIDEO PROCESSOR] Distinct source files: {len({x['path'] for x in timeline})}")
+    if not timeline:
+        raise ValueError("No usable clips found: candidate paths/timestamps were invalid.")
+    from core.video_processor import process_video
+    editing = dict(editing_settings or {})
+    editing.setdefault("make_vertical", make_vertical)
+    editing.setdefault("audio_normalize", editing.get("normalize_audio", True))
+    captions = dict(caption_settings or {})
+    captions.setdefault("enabled", True)
+    captions.setdefault("style", caption_style or "Bold Viral")
+    rendered_path = process_video(
+        input_path=source_path, output_path=str(output_path),
+        script={"timeline": timeline, "target_duration": duration or 30},
+        target_duration=duration, caption_style=caption_style,
+        caption_settings=captions, editing_settings=editing,
     )
-
-    return process_video(
-        input_video=source_path,
-        output_path=str(output_path),
-        clips=timeline or None,
-        target_duration=duration,
-        caption_settings=caption_settings or {},
-        editing_settings=editing_settings or {},
-    )
+    rendered_path = str(rendered_path or output_path)
+    if not Path(rendered_path).is_file() or Path(rendered_path).stat().st_size <= 0:
+        raise RuntimeError(f"Renderer returned without a valid MP4: {rendered_path}")
+    return {
+        "success": True, "output_path": rendered_path,
+        "final_video": rendered_path, "result_path": rendered_path,
+        "size_bytes": Path(rendered_path).stat().st_size,
+        "selected_clips": len(timeline),
+        "distinct_source_files": len({x["path"] for x in timeline}),
+    }
 
 
 
