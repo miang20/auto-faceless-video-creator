@@ -342,79 +342,39 @@ def _duration_budget(
     target_duration: float,
     story_length: int,
 ) -> List[float]:
-
     target_duration = max(
         5.0,
-        min(
-            180.0,
-            _safe_float(
-                target_duration,
-                DEFAULT_TARGET_DURATION,
-            ),
-        ),
+        min(180.0, _safe_float(target_duration, DEFAULT_TARGET_DURATION)),
     )
+    story_length = max(1, int(story_length))
+    if story_length == 1:
+        return [round(target_duration, 2)]
 
-    if story_length <= 1:
-        return [target_duration]
-
-    if story_length == 2:
-        ratios = [
-            0.42,
-            0.58,
-        ]
-
-    elif story_length == 3:
-        ratios = [
-            0.25,
-            0.30,
-            0.45,
-        ]
-
-    elif story_length == 4:
-        ratios = [
-            0.20,
-            0.22,
-            0.23,
-            0.35,
-        ]
-
-    elif story_length == 5:
-        ratios = [
-            0.15,
-            0.18,
-            0.20,
-            0.20,
-            0.27,
-        ]
-
+    fixed_ratios = {
+        2: [0.42, 0.58],
+        3: [0.25, 0.30, 0.45],
+        4: [0.20, 0.22, 0.23, 0.35],
+        5: [0.15, 0.18, 0.20, 0.20, 0.27],
+        6: [0.12, 0.14, 0.16, 0.16, 0.20, 0.22],
+    }
+    if story_length in fixed_ratios:
+        ratios = fixed_ratios[story_length]
     else:
-        ratios = [
-            0.12,
-            0.14,
-            0.16,
-            0.16,
-            0.20,
-            0.22,
-        ]
+        # More than six beats are allowed by the UI. Give every beat a budget
+        # while protecting a strong final payoff instead of silently assigning
+        # full source durations to beats that have no budget entry.
+        ratios = [0.12, 0.14, 0.16, 0.16]
+        ratios.extend([0.10] * (story_length - 5))
+        ratios.append(0.22)
 
-        ratios = ratios[:story_length]
-
-        total = sum(ratios)
-
-        if total > 0:
-            ratios = [
-                value / total
-                for value in ratios
-            ]
-
-    return [
-        round(
-            target_duration * ratio,
-            2,
-        )
-        for ratio in ratios
-    ]
-
+    total = sum(ratios)
+    ratios = [value / total for value in ratios]
+    budgets = [round(target_duration * ratio, 2) for ratio in ratios]
+    # Correct rounding drift on the final beat so the requested budget remains
+    # exact to centiseconds.
+    if budgets:
+        budgets[-1] = round(target_duration - sum(budgets[:-1]), 2)
+    return budgets
 
 def _build_edit_instruction(
     role: str,
