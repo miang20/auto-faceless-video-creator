@@ -29,8 +29,12 @@ def _key(candidate):
     )
 
 
-def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=None):
+def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=None, max_clips=10):
     target_duration = max(10, min(int(target_duration), 600))
+    try:
+        max_clips = max(1, min(100, int(max_clips)))
+    except (TypeError, ValueError):
+        max_clips = 10
     settings = dict(editing_settings or {})
     reaction_enabled = bool(settings.get("reaction_selection", settings.get("use_reactions", True)))
     contextual_broll = bool(settings.get("contextual_broll", settings.get("use_broll", True)))
@@ -123,7 +127,7 @@ def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=
     # Choose the strongest candidate for each beat, with modest bonuses for
     # source variety and detected reaction language when those features are on.
     for beat_id in beat_ids:
-        if total >= target_duration * 0.9:
+        if len(sequence) >= max_clips or total >= target_duration * 0.9:
             break
         options = [
             item for item in candidates
@@ -142,7 +146,7 @@ def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=
 
     # Fill any remaining time with the best unused sections while maintaining
     # a visual source-change rhythm where viable.
-    while total < target_duration * 0.85:
+    while total < target_duration * 0.85 and len(sequence) < max_clips:
         options = [item for item in candidates if _key(item) not in used]
         if not options:
             break
@@ -166,6 +170,7 @@ def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=
         "success": bool(sequence),
         "reason": None if sequence else "No usable clip candidates",
         "target_duration": target_duration,
+        "max_clips": max_clips,
         "estimated_duration": round(total, 3),
         "clip_count": len(sequence),
         "sequence": sequence,
