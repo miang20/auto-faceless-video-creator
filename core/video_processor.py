@@ -385,12 +385,9 @@ def _dynamic_caption_filters(
     if not text or caption_settings.get("enabled", True) is False:
         return []
 
-    # FFmpeg drawtext text passes through multiple parsers (drawtext option
-    # parsing and filtergraph parsing). Caption punctuation such as commas,
-    # semicolons, quotes, and colons can be interpreted as filter separators
-    # on Android FFmpeg builds even when backslash-escaped. Keep captions
-    # parser-safe by removing punctuation before building timed overlays.
-    safe_text = re.sub(r"[^\w\s]", "", _clean_text(text), flags=re.UNICODE)
+    # Preserve punctuation and symbols. Production renders write every label
+    # to a UTF-8 textfile, so FFmpeg never parses caption content as filter syntax.
+    safe_text = _clean_text(text)
     words = safe_text.split()
     if not words:
         return []
