@@ -76,6 +76,35 @@ class V2ContractTests(unittest.TestCase):
             ["/tmp/a.mp4", "/tmp/b.mp4"],
         )
 
+    def test_sequence_builder_honors_max_clips(self):
+        candidates = {
+            "candidates": [
+                {
+                    "source_video_id": "source-a", "start": 0, "end": 4.5,
+                    "duration": 4.5, "local_path": "/tmp/a.mp4",
+                    "local_start": 0, "local_end": 4.5,
+                    "final_score": 0.9, "beat_id": "hook",
+                    "beat_text": "opening hook",
+                },
+                {
+                    "source_video_id": "source-b", "start": 10, "end": 15.5,
+                    "duration": 5.5, "local_path": "/tmp/b.mp4",
+                    "local_start": 1, "local_end": 6.5,
+                    "final_score": 0.8, "beat_id": "payoff",
+                    "beat_text": "payoff",
+                },
+            ]
+        }
+        result = build_sequence(
+            {"peak_moments": []},
+            candidates,
+            target_duration=10,
+            editing_settings={},
+            max_clips=1,
+        )
+        self.assertEqual(result["max_clips"], 1)
+        self.assertEqual(result["clip_count"], 1)
+
     def test_renderer_preserves_local_section_path_and_timestamps(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
