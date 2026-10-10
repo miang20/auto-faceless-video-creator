@@ -13,41 +13,83 @@ from core.downloader import download_video
 from core.pipeline import execute_video_pipeline
 
 
-def _copy_final_video_to_phone(result: dict) -> Optional[str]:
-    """Best-effort automatic copy for the Termux worker; harmless off-device."""
-    candidates = [
-        result.get("output_path"),
-        result.get("final_video"),
-        result.get("processing", {}).get("output_path")
-        if isinstance(result.get("processing"), dict) else None,
-    ]
-    source = next(
-        (Path(value) for value in candidates if value and Path(value).is_file()),
-        None,
-    )
-    if source is None:
-        return None
+def _copy_final_video_to_phone(result, output_dir) -> Optional[str]:
+    """Best-effort export of the rendered MP4 to Android shared storage."""
+    home = Path.home()
+    candidates = []
 
-    destination_dir = Path.home() / "storage" / "shared" / "Movies" / "AutoFaceless"
+    def collect(value, preferred=False):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_is_path = any(
+                    token in str(key).lower()
+                    for token in ("output", "final", "render", "video_path")
+                )
+                collect(item, preferred or key_is_path)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                collect(item, preferred)
+        elif isinstance(value, str) and value.lower().endswith(".mp4"):
+            path = Path(value).expanduser()
+            if not path.is_absolute():
+                path = Path.cwd() / path
+            if path.is_file():
+                candidates.append((preferred, path))
+
     try:
-        destination_dir.mkdir(parents=True, exist_ok=True)
-        destination = destination_dir / source.name
-        if source.resolve() != destination.resolve():
-            shutil.copy2(source, destination)
-        try:
-            subprocess.run(
-                ["termux-media-scan", str(destination)],
-                timeout=15,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception:
-            pass
-        print("[V2 PHONE COPY] Final MP4 saved:", str(destination))
-        return str(destination)
+        collect(result)
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        source = candidates[0][1] if candidates else None
+
+        if source is None:
+            output = Path(output_dir)
+            if output.exists():
+                matches = [
+                    path for path in output.rglob("*.mp4")
+                    if path.is_file()
+                    and (
+                        path.name.lower().startswith("final_")
+                        or "final" in path.name.lower()
+                    )
+                ]
+                if matches:
+                    source = max(matches, key=lambda path: path.stat().st_mtime)
+
+        if source is None:
+            print("[V2 PHONE COPY] Skipped: final MP4 path not found.")
+            return None
+
+        destinations = [
+            home / "storage" / "shared" / "Movies" / "AutoFaceless",
+            home / "storage" / "shared" / "DCIM" / "AutoFaceless",
+        ]
+        saved_path = None
+        for directory in destinations:
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                target = directory / source.name
+                if source.resolve() != target.resolve():
+                    shutil.copy2(source, target)
+                try:
+                    subprocess.run(
+                        ["termux-media-scan", str(target)],
+                        timeout=15,
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except Exception:
+                    pass
+                if saved_path is None:
+                    saved_path = str(target)
+            except Exception as copy_error:
+                print("[V2 PHONE COPY] Destination skipped:", str(copy_error)[:180])
+
+        if saved_path:
+            print("[V2 PHONE COPY] Final MP4 saved:", saved_path)
+        return saved_path
     except Exception as copy_error:
-        # Phone storage permission must not turn a valid render into a failed job.
+        # Storage permission must never turn a valid render into a failed job.
         print("[V2 PHONE COPY] Skipped:", str(copy_error)[:240])
         return None
 
@@ -291,7 +333,7 @@ def run_video_job(
 
             return result
 
-        phone_copy_path = _copy_final_video_to_phone(result)
+        phone_copy_path = _copy_final_video_to_phone(result, output_dir)
         if phone_copy_path:
             result["phone_copy_path"] = phone_copy_path
 
