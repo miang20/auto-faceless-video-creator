@@ -845,9 +845,35 @@ def _render_single_segment(
     )
 
     if result.returncode != 0:
+        stderr_text = result.stderr or ""
+        caption_parse_failure = (
+            caption_settings
+            and caption_settings.get("enabled", True) is not False
+            and "Either text, a valid file, a timecode or text source must be provided" in stderr_text
+        )
+        if caption_parse_failure:
+            # Keep the job renderable if an individual caption trips FFmpeg's
+            # drawtext parser. Retry this segment with captions disabled only;
+            # preserve the selected clip, crop/zoom, audio, and all other edits.
+            print(
+                "[V2 RENDER] Caption parser rejected text; retrying this "
+                "segment without captions."
+            )
+            safe_captions = dict(caption_settings or {})
+            safe_captions["enabled"] = False
+            return _render_single_segment(
+                input_path=input_path,
+                output_path=output_path,
+                clip=clip,
+                output_width=output_width,
+                output_height=output_height,
+                fps=fps,
+                editing_settings=editing_settings,
+                caption_settings=safe_captions,
+            )
         raise RuntimeError(
             "FFmpeg failed while rendering segment:\n"
-            + result.stderr[-4000:]
+            + stderr_text[-4000:]
         )
 
     return output_path
