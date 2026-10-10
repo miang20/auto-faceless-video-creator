@@ -329,16 +329,22 @@ def run_video_job(
 
         if not result.get("success"):
             error = str(result.get("error", "Pipeline execution failed."))
-            # Last-resort recovery for FFmpeg drawtext/parser errors. The
-            # renderer normally retries the affected segment itself; if an
-            # older local renderer or another caption edge case still fails,
-            # rerun the same downloaded source and edit plan without captions.
-            # This does not touch the frozen downloader or other edit settings.
+            # Never silently ship a captionless final when captions were
+            # requested. Captionless recovery is an explicit opt-in only;
+            # otherwise preserve the FFmpeg diagnostic and mark the job failed.
             caption_settings_enabled = (
                 isinstance(caption_settings, dict)
                 and caption_settings.get("enabled", True) is not False
             )
-            if caption_settings_enabled and "drawtext" in error.lower():
+            allow_captionless_fallback = (
+                isinstance(editing_settings, dict)
+                and editing_settings.get("allow_captionless_fallback", False) is True
+            )
+            if (
+                caption_settings_enabled
+                and "drawtext" in error.lower()
+                and allow_captionless_fallback
+            ):
                 print(
                     "[V2 JOB] Caption rendering failed; retrying the full "
                     "pipeline once with captions disabled."
