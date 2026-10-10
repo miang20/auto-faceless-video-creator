@@ -18,6 +18,8 @@ jobs:
           python-version: "3.11"
       - name: Compile Python modules
         run: python -m compileall -q app.py core tests
+      - name: Check Termux recovery script syntax
+        run: bash -n scripts/termux_recover_drawtext.sh
       - name: Run renderer and sequence tests
         run: |
           python -m pip install pytest
