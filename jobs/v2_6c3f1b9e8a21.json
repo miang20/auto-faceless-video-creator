@@ -1,7 +1,7 @@
 {
   "job_id": "v2_6c3f1b9e8a21",
   "created_at": "2026-10-11T11:00:00.000Z",
-  "status": "completed",
+  "status": "running",
   "pipeline": "video",
   "pipeline_version": "2.0",
   "input_value": "https://youtube.com/shorts/Dnirz9mlPj8",
@@ -40,6 +40,5 @@
     "smart_subject_tracking": true,
     "target_duration": 30
   },
-  "updated_at": "2026-10-10T23:33:55Z",
-  "result_path": "/data/data/com.termux/files/home/v2-test/output/jobs/final_Dnirz9mlPj8.mp4"
+  "updated_at": "2026-10-10T23:34:16Z"
 }
