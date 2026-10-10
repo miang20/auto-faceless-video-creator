@@ -291,7 +291,9 @@ def _choose_story_clips(
         if len(chosen) >= 8:
             break
 
-    return _sort_chronological(chosen)
+    # Preserve narrative order (HOOK -> SETUP -> ESCALATION -> REACTION ->
+    # PAYOFF -> ENDING). Chronological sorting here would undo the hook-first edit.
+    return chosen
 
 
 def _assign_roles(
@@ -301,7 +303,8 @@ def _assign_roles(
     if not clips:
         return []
 
-    ordered = _sort_chronological(clips)
+    # Input order is the intended edit order, not source timestamp order.
+    ordered = list(clips)
 
     roles = [
         "HOOK",
