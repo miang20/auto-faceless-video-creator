@@ -14,10 +14,7 @@ from core.transcription import (
 )
 from core.clip_analyzer import build_clip_analysis_report
 from core.video_processor import process_video
-from core.script_generator import (
-    generate_script,
-    build_visual_editing_plan,
-)
+from core.script_generator import build_script
 
 
 PIPELINE_VERSION = "2.0"
@@ -114,20 +111,36 @@ def run_script_generation(
     topic: str,
     research: dict,
     reference_url: Optional[str] = None,
+    clip_analysis: Optional[dict] = None,
+    target_duration: int = 30,
+    caption_style: str = "Bold Viral",
+    caption_settings: Optional[dict] = None,
+    editing_settings: Optional[dict] = None,
 ) -> dict:
-
-    script = generate_script(
-        topic=topic,
-        research=research,
-        reference_url=reference_url,
-    )
-
-    script["visual_editing_plan"] = (
-        build_visual_editing_plan(
-            script
+    """Build a real story/edit blueprint from analyzed clips."""
+    if isinstance(clip_analysis, dict):
+        script = build_script(
+            clip_analysis=clip_analysis,
+            target_duration=target_duration,
+            topic=topic or "",
+            caption_style=caption_style,
+            caption_settings=caption_settings,
+            editing_settings=editing_settings,
         )
-    )
-
+    else:
+        sources = research.get("sources", []) if isinstance(research, dict) else []
+        script = {
+            "topic": topic or "",
+            "reference_url": reference_url,
+            "context_sources": sources if isinstance(sources, list) else [],
+            "target_duration": target_duration,
+            "format": "9:16",
+            "narration": False,
+            "timeline": [],
+            "story_structure": [],
+            "editing": dict(editing_settings or {}),
+        }
+    script["visual_editing_plan"] = dict(script.get("editing", {}))
     return script
 
 
@@ -459,6 +472,30 @@ def run_video_pipeline(
         output / f"{pipeline_id}_clip_analysis.json",
     )
 
+    # Build the actual story blueprint only after clip analysis exists.
+    # The old call passed unsupported kwargs to generate_script and only saved
+    # an error object instead of a usable timeline.
+    try:
+        script = run_script_generation(
+            topic=topic or "",
+            research=research,
+            reference_url=reference_url,
+            clip_analysis=clip_analysis,
+            target_duration=duration or 30,
+            caption_style=caption_style,
+            caption_settings=caption_settings,
+            editing_settings=editing_settings,
+        )
+    except Exception as script_error:
+        print("[V2 STORY] Blueprint generation failed:", str(script_error)[:240])
+        script = {
+            "topic": topic or "",
+            "timeline": [],
+            "story_structure": [],
+            "error": str(script_error),
+        }
+    script_path = save_json(script, output / f"{pipeline_id}_script.json")
+
     # -----------------------------------------------------
 
     # V2_SEQUENCE_INTEGRATION
@@ -483,7 +520,7 @@ def run_video_pipeline(
             and item.get("video_id")
         ][:3]
 
-        raw_beats = clip_analysis.get("clips", [])
+        raw_beats = script.get("timeline") or clip_analysis.get("clips", [])
         profile = {
             "content": {
                 "topic": topic or "",
@@ -497,8 +534,8 @@ def run_video_pipeline(
                 {
                     "index": index + 1,
                     "text": str(item.get("text") or item.get("caption") or ""),
-                    "start": item.get("start", item.get("start_time")),
-                    "end": item.get("end", item.get("end_time")),
+                    "start": item.get("start", item.get("start_time", item.get("source_start"))),
+                    "end": item.get("end", item.get("end_time", item.get("source_end"))),
                 }
                 for index, item in enumerate(raw_beats)
                 if isinstance(item, dict)
@@ -542,10 +579,28 @@ def run_video_pipeline(
             )
 
             if sequence_report.get("success") and sequence_report.get("sequence"):
+                selected_sequence = sequence_report["sequence"]
                 render_analysis = {
-                    "sequence": sequence_report["sequence"],
+                    "sequence": selected_sequence,
                     "sequence_report": sequence_report,
                     "candidate_report": candidate_report,
+                }
+                # The exact selected sequence becomes the story blueprint that
+                # is handed to the renderer; roles and edit plan are persisted.
+                script["timeline"] = selected_sequence
+                script["selected_sequence"] = selected_sequence
+                script["story_structure"] = [
+                    str(item.get("role", "MAIN")).upper()
+                    for item in selected_sequence
+                ]
+                script["visual_editing_plan"] = {
+                    **dict(script.get("editing", {})),
+                    **dict(sequence_report.get("editing_plan", {})),
+                }
+                clip_analysis["story_blueprint"] = {
+                    "timeline": selected_sequence,
+                    "story_structure": script["story_structure"],
+                    "visual_editing_plan": script["visual_editing_plan"],
                 }
                 clip_analysis["sequence_report"] = sequence_report
                 clip_analysis["candidate_report_summary"] = {
@@ -553,10 +608,8 @@ def run_video_pipeline(
                     "sections_analyzed": candidate_report.get("sections_analyzed", 0),
                     "beats_analyzed": candidate_report.get("beats_analyzed", 0),
                 }
-                save_json(
-                    clip_analysis,
-                    output / f"{pipeline_id}_clip_analysis.json",
-                )
+                save_json(script, script_path)
+                save_json(clip_analysis, output / f"{pipeline_id}_clip_analysis.json")
                 print(
                     "[V2 SEQUENCE] Selected:",
                     sequence_report.get("clip_count", 0),
