@@ -213,6 +213,7 @@ def _normalize_clip(
             end = start + 3.0
 
     return {
+        "path": str(clip.get("path") or clip.get("local_path") or clip.get("file_path") or ""),
         "start": start,
         "end": max(
             start + 0.1,
@@ -634,13 +635,11 @@ def _render_single_segment(
     caption_settings: Optional[Dict[str, Any]],
 ) -> str:
 
-    width, height = _probe_dimensions(
-        input_path
-    )
-
-    start = _safe_float(
-        clip.get("start")
-    )
+    segment_input_path = str(clip.get("path") or input_path)
+    if not os.path.isfile(segment_input_path):
+        raise FileNotFoundError(f"Clip source file not found: {segment_input_path}")
+    width, height = _probe_dimensions(segment_input_path)
+    start = _safe_float(clip.get("start"))
 
     duration = _safe_float(
         clip.get("duration")
@@ -667,7 +666,7 @@ def _render_single_segment(
         "-ss",
         f"{start:.3f}",
         "-i",
-        input_path,
+        segment_input_path,
         "-t",
         f"{duration:.3f}",
         "-vf",
