@@ -25,6 +25,7 @@ jobs:
         run: |
           python - <<'PY'
           from core.video_processor import _normalize_drawtext_filter, _dynamic_caption_filters
+          from core.pipeline import _apply_visual_change_rhythm
 
           malformed = "scale=1080:1920,drawtext:fontfile='/system/fonts/Roboto-Regular.ttf':fontsize=54:fontcolor=white"
           fixed = _normalize_drawtext_filter(malformed)
@@ -40,5 +41,13 @@ jobs:
           assert filters, "Caption builder returned no filters"
           assert all(item.startswith("drawtext=") for item in filters), filters
           assert all("drawtext:" not in item for item in filters), filters
-          print("V2 renderer smoke checks passed")
+          timeline = _apply_visual_change_rhythm(
+              [{"path": "source.mp4", "start": 0.0, "end": 12.0, "duration": 12.0, "text": "moment"}],
+              enabled=True,
+              max_segment_seconds=4.0,
+          )
+          assert len(timeline) == 3, timeline
+          assert all(2.0 <= item["duration"] <= 4.0 for item in timeline), timeline
+          assert abs(sum(item["duration"] for item in timeline) - 12.0) < 0.01, timeline
+          print("V2 renderer and visual-rhythm smoke checks passed")
           PY
