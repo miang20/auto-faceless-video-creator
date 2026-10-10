@@ -1,0 +1,44 @@
+name: V2 smoke checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-and-renderer-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile application and pipeline
+        run: python -m compileall -q app.py core
+      - name: Verify FFmpeg filter repair and caption syntax
+        run: |
+          python - <<'PY'
+          from core.video_processor import _normalize_drawtext_filter, _dynamic_caption_filters
+
+          malformed = "scale=1080:1920,drawtext:fontfile='/system/fonts/Roboto-Regular.ttf':fontsize=54:fontcolor=white"
+          fixed = _normalize_drawtext_filter(malformed)
+          assert "drawtext:fontfile" not in fixed, fixed
+          assert "drawtext=fontfile" in fixed, fixed
+          assert _normalize_drawtext_filter("scale=1080:1920,drawtext=font='DejaVu Sans':fontsize=54") == "scale=1080:1920,drawtext=font='DejaVu Sans':fontsize=54"
+
+          filters = _dynamic_caption_filters(
+              "Wait this is unbelievable",
+              3.0,
+              {"enabled": True, "font_size": 54, "text_color": "white", "highlight_color": "yellow"},
+          )
+          assert filters, "Caption builder returned no filters"
+          assert all(item.startswith("drawtext=") for item in filters), filters
+          assert all("drawtext:" not in item for item in filters), filters
+          print("V2 renderer smoke checks passed")
+          PY
