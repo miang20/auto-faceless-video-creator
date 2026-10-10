@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -301,6 +302,35 @@ def run_video_processing(
             "score": clip.get("score", clip.get("final_score", 0)),
         })
         prior_ranges.append((start, end))
+
+    # Enforce a fast visual rhythm even when the analyzer returns long source
+    # windows. Split each selected window into evenly sized 2-4 second beats;
+    # never loop footage or alter source timestamps beyond the chosen window.
+    rhythm_enabled = bool((editing_settings or {}).get("visual_change_rhythm", True))
+    if rhythm_enabled:
+        max_visual_seconds = 4.0
+        rhythmic_timeline = []
+        for item in timeline:
+            clip_duration = float(item["end"]) - float(item["start"])
+            if clip_duration <= max_visual_seconds + 0.01:
+                rhythmic_timeline.append(item)
+                continue
+            parts = max(2, int(math.ceil(clip_duration / max_visual_seconds)))
+            part_duration = clip_duration / parts
+            for part_index in range(parts):
+                part_start = float(item["start"]) + part_index * part_duration
+                part_end = (
+                    float(item["end"])
+                    if part_index == parts - 1
+                    else float(item["start"]) + (part_index + 1) * part_duration
+                )
+                part = dict(item)
+                part["start"] = round(part_start, 4)
+                part["end"] = round(part_end, 4)
+                part["duration"] = max(0.1, part_end - part_start)
+                rhythmic_timeline.append(part)
+        timeline = rhythmic_timeline
+
     print(f"[VIDEO PROCESSOR] Selected clips: {len(timeline)}")
     print(f"[VIDEO PROCESSOR] Distinct source files: {len({x['path'] for x in timeline})}")
     if not timeline:
