@@ -20,6 +20,50 @@ def test_dynamic_captions_are_timed_and_word_highlighted():
     assert any("enable='gte(t\\," in item for item in filters)
 
 
+
+def test_ffmpeg_renders_captioned_segment(tmp_path):
+    import shutil
+    import subprocess
+    import pytest
+    from core.video_processor import _render_single_segment, _probe_duration
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("FFmpeg is not installed")
+
+    source = tmp_path / "caption_source.mp4"
+    output = tmp_path / "caption_output.mp4"
+    generated = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+            "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", str(source),
+        ],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert generated.returncode == 0, generated.stderr
+
+    _render_single_segment(
+        input_path=str(source),
+        output_path=str(output),
+        clip={"path": str(source), "start": 0, "duration": 2, "text": "Wait what just happened"},
+        output_width=108,
+        output_height=192,
+        fps=30,
+        editing_settings={
+            "dynamic_zoom": False,
+            "punch_in": False,
+            "smart_subject_tracking": False,
+            "remove_silence": False,
+            "audio_normalize": False,
+            "normalize_audio": False,
+        },
+        caption_settings={"enabled": True, "font_size": 24, "position": "lower-third"},
+    )
+    assert output.is_file()
+    assert _probe_duration(str(output)) > 1.0
+
 def test_caption_toggle_disables_dynamic_text():
     assert _dynamic_caption_filters(
         "Wait what just happened",
