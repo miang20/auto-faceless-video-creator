@@ -143,16 +143,21 @@ def find_clip_candidates(discovery, profile):
 
     sections = []
 
-    for p in sorted(section_dir.glob("*.mp4")):
-        x = parse_section(p)
-
-        if x:
-            sections.append(x)
-
     source_map = {
         x.get("video_id"): x
         for x in discovery.get("sources", [])
+        if isinstance(x, dict) and x.get("video_id")
     }
+
+    for p in sorted(section_dir.glob("*.mp4")):
+        x = parse_section(p)
+        if not x:
+            continue
+        # Only score sections from this job's discovered sources. Otherwise
+        # stale downloads from previous jobs can silently enter a new edit.
+        if source_map and x.get("video_id") not in source_map:
+            continue
+        sections.append(x)
 
     results = []
 
