@@ -522,7 +522,7 @@ with st.expander("🎞️ Editing Settings", expanded=True):
     with c3:
         contextual_broll = st.checkbox(
             "Contextual B-roll",
-            value=False,
+            value=True,
         )
 
         visual_change_rhythm = st.checkbox(
@@ -537,6 +537,14 @@ with st.expander("🎞️ Editing Settings", expanded=True):
         "contextual_broll": contextual_broll,
         "reaction_selection": reaction_selection,
         "visual_change_rhythm": visual_change_rhythm,
+        "max_visual_segment_seconds": 4.0,
+        "smart_subject_tracking": True,
+        "make_vertical": True,
+        "punch_in": True,
+        "audio_normalize": normalize_audio,
+        "use_broll": contextual_broll,
+        "use_reactions": reaction_selection,
+        "target_duration": int(duration),
     }
 
 
