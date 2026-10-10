@@ -1003,16 +1003,14 @@ def _render_single_segment(
             )
         )
         if caption_filter_failure:
-            # Production captions use textfiles. Silently disabling captions
-            # would create a falsely successful, uncaptioned final video.
-            # Surface this error so CI and the job status stay truthful.
+            # Production captions use textfiles. Never silently drop requested
+            # captions when FFmpeg rejects the caption filter graph.
             if caption_text_dir:
                 raise RuntimeError(
                     "FFmpeg rejected textfile-based captions; refusing to "
                     "complete the job without required captions.\\n"
                     + stderr_text[-4000:]
                 )
-            # Legacy callers without textfiles retain the old safe fallback.
             print("[V2 RENDER] Inline caption parser rejected text; retrying without captions.")
             safe_captions = dict(caption_settings or {})
             safe_captions["enabled"] = False
@@ -1026,8 +1024,31 @@ def _render_single_segment(
                 editing_settings=editing_settings,
                 caption_settings=safe_captions,
             )
+
+        # Silence removal is optional. Android/Termux FFmpeg builds can reject
+        # select/aselect filter graphs when combined with zoompan or drawtext.
+        # Retry once without this enhancement while retaining captions, crop,
+        # tracking, zoom, and audio normalization.
+        if silences and bool(editing_settings.get("remove_silence", False)):
+            print(
+                "[V2 RENDER] Silence-removal filter failed; retrying segment "
+                "with silence removal disabled."
+            )
+            safe_editing = dict(editing_settings)
+            safe_editing["remove_silence"] = False
+            return _render_single_segment(
+                input_path=input_path,
+                output_path=output_path,
+                clip=clip,
+                output_width=output_width,
+                output_height=output_height,
+                fps=fps,
+                editing_settings=safe_editing,
+                caption_settings=caption_settings,
+            )
+
         raise RuntimeError(
-            "FFmpeg failed while rendering segment:\n"
+            "FFmpeg failed while rendering segment:\\n"
             + stderr_text[-4000:]
         )
 
