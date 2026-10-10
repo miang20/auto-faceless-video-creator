@@ -560,6 +560,25 @@ def run_video_pipeline(
             "score": item.get("score", 0),
         })
     if story_timeline:
+        # Prefer granular story beats over a broad interval that contains
+        # several smaller beats (e.g. a full ending range plus setup/payoff).
+        # Otherwise the renderer's overlap guard drops the useful inner beats.
+        granular_timeline = []
+        for item in story_timeline:
+            contained = sum(
+                1 for other in story_timeline
+                if other is not item
+                and other["start"] >= item["start"]
+                and other["end"] <= item["end"]
+                and (other["start"] > item["start"] or other["end"] < item["end"])
+            )
+            if contained >= 2:
+                continue
+            granular_timeline.append(item)
+        story_timeline = sorted(
+            granular_timeline,
+            key=lambda item: (item["start"], item["end"]),
+        )
         render_analysis = {
             "sequence": story_timeline,
             "story_blueprint": script,
@@ -688,7 +707,9 @@ def run_video_pipeline(
             print("[V2 SEQUENCE] Insufficient sections/beats; using original clips.")
 
     except Exception as integration_error:
-        render_analysis = clip_analysis
+        # Keep the story-timeline fallback already prepared above. Reverting
+        # to raw clip_analysis here discards the generated story and often
+        # leaves only two long, nearly-original segments.
         print(
             "[V2 SEQUENCE] Integration fallback:",
             repr(integration_error)[:300],
