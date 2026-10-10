@@ -122,3 +122,14 @@ def test_pipeline_builds_story_blueprint_from_clip_analysis():
     assert script["story_structure"]
     assert script["visual_editing_plan"]["dynamic_zoom"] is True
     assert script["context_sources"][0]["title"] == "Perfect timing moment"
+
+def test_subject_tracking_builds_time_aware_crop_expression():
+    from core.video_processor import _subject_crop_expression, _vertical_crop_filter
+
+    track = [(0.0, 0.0), (0.5, 120.0), (1.0, 260.0)]
+    expression = _subject_crop_expression(track)
+    assert "if(lt(t\\,0.500)" in expression
+    assert "260.00" in expression
+    graph = _vertical_crop_filter(1920, 1080, 1080, 1920, subject_track=track)
+    assert "crop=1080:1920:x='" in graph
+    assert "if(lt(t\\,0.500)" in graph
