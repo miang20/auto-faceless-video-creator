@@ -120,6 +120,20 @@ def make_beats(profile):
     ]
 
 
+def _reaction_score(text):
+    reaction_terms = {
+        "wow", "whoa", "shocked", "shocking", "reaction", "scream",
+        "screaming", "laugh", "laughing", "gasp", "crowd", "cheers",
+        "surprise", "surprised", "panic", "crying", "unreal", "damn",
+        "no way", "holy", "wait",
+    }
+    words = tokens(text)
+    if not words:
+        return 0.0
+    hits = sum(1 for word in words if word in reaction_terms)
+    return round(min(1.0, hits / max(1.0, len(words) * 0.18)), 3)
+
+
 def find_clip_candidates(discovery, profile):
     keywords = profile.get("content", {}).get("keywords", [])
     topic = profile.get("content", {}).get("topic", "")
@@ -142,7 +156,7 @@ def find_clip_candidates(discovery, profile):
 
     results = []
 
-    for beat in beats:
+    for beat_index, beat in enumerate(beats):
         beat_text = f"{topic} {beat.get('text', '')}"
 
         for section in sections:
@@ -187,6 +201,15 @@ def find_clip_candidates(discovery, profile):
                 3,
             )
 
+            # Each downloaded 10-second section becomes a shorter edit beat.
+            # Vary the local in-section offset deterministically to avoid repeating
+            # the first frames of every section in the final montage.
+            clip_duration = min(3.5, section["duration"])
+            max_offset = max(0.0, section["duration"] - clip_duration)
+            local_start = min(max_offset, (beat_index * 1.7) % (max_offset + 0.001)) if max_offset > 0 else 0.0
+            local_end = min(section["duration"], local_start + clip_duration)
+            reaction = _reaction_score(beat.get("text", ""))
+
             results.append({
                 "beat_id": beat["id"],
                 "beat_text": beat_text,
@@ -194,13 +217,17 @@ def find_clip_candidates(discovery, profile):
                 "source_url": source.get("url"),
                 "source_title": source.get("title", ""),
                 "local_path": section["path"],
+                "local_start": round(local_start, 3),
+                "local_end": round(local_end, 3),
                 "start": section["start"],
                 "end": section["end"],
-                "duration": section["duration"],
+                "duration": round(local_end - local_start, 3),
+                "section_duration": section["duration"],
                 "semantic_score": sem,
                 "source_score": src,
                 "duration_score": ds,
                 "timing_score": round(timing, 3),
+                "reaction_score": reaction,
                 "final_score": final,
                 "status": "candidate",
             })
