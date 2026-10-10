@@ -5,7 +5,7 @@ import yt_dlp
 from yt_dlp.utils import download_range_func
 
 
-SECTION_DIR = Path("downloads/sections")
+SECTION_DIR = Path(__file__).resolve().parent.parent / "downloads" / "sections"
 SECTION_DIR.mkdir(parents=True, exist_ok=True)
 
 
