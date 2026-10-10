@@ -64,6 +64,36 @@ def save_json(
     return str(output)
 
 
+def _build_peak_moments(raw_beats) -> list[dict]:
+    """Normalize story beat timestamps for external source matching.
+
+    Script-generator beats use source_start/source_end while clip-analysis
+    beats commonly use start/end. Accept both contracts so the external
+    sequence stage does not silently skip every generated story beat.
+    """
+    moments = []
+    for index, item in enumerate(raw_beats or []):
+        if not isinstance(item, dict):
+            continue
+        start = item.get("start", item.get("start_time", item.get("source_start")))
+        end = item.get("end", item.get("end_time", item.get("source_end")))
+        if start is None or end is None:
+            continue
+        try:
+            start, end = float(start), float(end)
+        except (TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        moments.append({
+            "index": index + 1,
+            "text": str(item.get("text") or item.get("caption") or item.get("beat_text") or ""),
+            "start": start,
+            "end": end,
+        })
+    return moments
+
+
 # =========================================================
 # RESEARCH
 # =========================================================
@@ -576,18 +606,7 @@ def run_video_pipeline(
                     ]
                 )),
             },
-            "peak_moments": [
-                {
-                    "index": index + 1,
-                    "text": str(item.get("text") or item.get("caption") or ""),
-                    "start": item.get("start", item.get("start_time", item.get("source_start"))),
-                    "end": item.get("end", item.get("end_time", item.get("source_end"))),
-                }
-                for index, item in enumerate(raw_beats)
-                if isinstance(item, dict)
-                and item.get("start", item.get("start_time")) is not None
-                and item.get("end", item.get("end_time")) is not None
-            ],
+            "peak_moments": _build_peak_moments(raw_beats),
         }
 
         downloaded = 0
