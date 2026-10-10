@@ -443,7 +443,8 @@ def _dynamic_caption_filters(
             parts.extend(["shadowx=2", "shadowy=2", "shadowcolor=black@0.65"])
         if box:
             parts.extend(["box=1", "boxcolor=black@0.55", "boxborderw=10"])
-        parts.append(f"enable='between(t,{start:.3f},{end:.3f})'")
+        # Escape expression commas explicitly for FFmpeg filtergraph parsing on Android builds.
+        parts.append(f"enable='gte(t\\,{start:.3f})*lt(t\\,{end:.3f})'")
         return "=".join(parts[:1]) + "=" + ":".join(parts[1:])
 
     # Group up to three words together. A yellow overlay advances word by word.
