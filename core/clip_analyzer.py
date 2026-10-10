@@ -992,7 +992,7 @@ def analyze_transcript(
                 item for item in selected
                 if _overlap_ratio(item, hook_candidate) < 0.55
             ]
-            selected = [hook_candidate, *selected]
+            selected = [hook_candidate, *selected][:max(1, int(max_clips))]
             remaining_candidates = sorted(
                 candidates,
                 key=lambda item: _safe_float(item.get("score")),
