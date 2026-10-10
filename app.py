@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -586,15 +587,18 @@ if st.button(
 # ============================================================
 
 def _resolve_job_video(job):
-    """Resolve this completed job's MP4 from its result manifest first."""
+    """Resolve this job's exact MP4 without accidentally showing another job's video."""
     result_path = str(job.get("result_path") or "").strip()
     if result_path:
-        manifest = Path(result_path).expanduser()
-        if not manifest.is_absolute():
-            manifest = Path.cwd() / manifest
-        if manifest.is_file():
+        candidate = Path(result_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        # The worker may store the MP4 path directly rather than a JSON manifest.
+        if candidate.is_file() and candidate.stat().st_size > 0 and candidate.suffix.lower() == ".mp4":
+            return candidate
+        if candidate.is_file():
             try:
-                payload = json.loads(manifest.read_text(encoding="utf-8"))
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
                 found = []
 
                 def walk(value, preferred=False):
@@ -609,11 +613,11 @@ def _resolve_job_video(job):
                         for item in value:
                             walk(item, preferred)
                     elif isinstance(value, str) and value.lower().endswith(".mp4"):
-                        candidate = Path(value).expanduser()
-                        if not candidate.is_absolute():
-                            candidate = Path.cwd() / candidate
-                        if candidate.is_file() and candidate.stat().st_size > 0:
-                            found.append((preferred, candidate))
+                        path = Path(value).expanduser()
+                        if not path.is_absolute():
+                            path = Path.cwd() / path
+                        if path.is_file() and path.stat().st_size > 0:
+                            found.append((preferred, path))
 
                 walk(payload)
                 if found:
@@ -622,16 +626,30 @@ def _resolve_job_video(job):
             except Exception:
                 pass
 
-    # Phone export and output-folder lookup are the safe fallback when the
-    # worker's manifest path is absolute but no longer directly accessible.
     videos = completed_videos()
     if not videos:
         return None
+
+    # Rendered filenames use the YouTube video ID, not the GitHub job ID.
+    source_url = str(job.get("input_value") or job.get("reference_url") or "")
+    video_id = ""
+    for marker in ("youtu.be/", "shorts/", "embed/", "watch?v="):
+        if marker in source_url:
+            video_id = source_url.split(marker, 1)[1].split("?", 1)[0].split("&", 1)[0].split("#", 1)[0].strip("/")
+            if video_id:
+                break
+
+    if video_id:
+        matching = [video for video in videos if video_id in video.name]
+        if matching:
+            return max(matching, key=lambda path: path.stat().st_mtime)
+
     job_id = str(job.get("job_id") or "")
     matching = [video for video in videos if job_id and job_id in video.name]
     if matching:
-        return matching[0]
-    return videos[0]
+        return max(matching, key=lambda path: path.stat().st_mtime)
+
+    return None
 
 
 def _render_video_card(video, prefix="video"):
