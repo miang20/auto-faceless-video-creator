@@ -846,12 +846,20 @@ def _render_single_segment(
 
     if result.returncode != 0:
         stderr_text = result.stderr or ""
-        caption_parse_failure = (
+        # FFmpeg versions differ in how they report malformed drawtext
+        # expressions. Do not depend on one exact error string: if captions
+        # were enabled and the filter graph reports a drawtext failure, retry
+        # this segment once with captions disabled. Other render failures still
+        # fail normally and retain the original FFmpeg diagnostic.
+        caption_filter_failure = (
             caption_settings
             and caption_settings.get("enabled", True) is not False
-            and "Either text, a valid file, a timecode or text source must be provided" in stderr_text
+            and (
+                "drawtext" in stderr_text.lower()
+                or "Either text, a valid file, a timecode or text source must be provided" in stderr_text
+            )
         )
-        if caption_parse_failure:
+        if caption_filter_failure:
             # Keep the job renderable if an individual caption trips FFmpeg's
             # drawtext parser. Retry this segment with captions disabled only;
             # preserve the selected clip, crop/zoom, audio, and all other edits.
