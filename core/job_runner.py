@@ -280,6 +280,14 @@ def run_video_job(
             30,
         )
 
+        # Honor the Max Clips value selected in the V2 app instead of always
+        # using the worker function's default. Older jobs remain compatible.
+        job_max_clips = job.get("max_clips", max_clips)
+        try:
+            job_max_clips = max(1, min(100, int(job_max_clips)))
+        except (TypeError, ValueError):
+            job_max_clips = max_clips
+
         caption_style = job.get(
             "caption_style",
             "Bold Viral",
@@ -309,7 +317,7 @@ def run_video_job(
             whisper_command=whisper_command,
             model_path=model_path,
             language=language,
-            max_clips=max_clips,
+            max_clips=job_max_clips,
             output_dir=output_dir,
             make_vertical=make_vertical,
             keep_audio=keep_audio,
