@@ -267,8 +267,23 @@ def process_job(remote_job: dict) -> None:
         from core.job_runner import run_video_job
 
         whisper_command, model_path = find_existing_whisper_path()
+        if whisper_command:
+            whisper_command = str(Path(whisper_command).expanduser().resolve())
+            os.environ["WHISPER_COMMAND"] = whisper_command
+        if model_path:
+            model_path = str(Path(model_path).expanduser().resolve())
+            if not Path(model_path).is_file():
+                raise RuntimeError(f"Discovered Whisper model path is not a file: {model_path}")
+            os.environ["WHISPER_MODEL"] = model_path
+
+        log("Whisper resolved:", "command=", whisper_command or "NOT FOUND",
+            "model=", model_path or "NOT FOUND")
         if not whisper_command or not model_path:
-            log("Whisper executable/model not found; pipeline will use its configured fallback if available.")
+            raise RuntimeError(
+                "Whisper executable/model not found. "
+                "Expected ~/FaisalClipFactory/whisper.cpp/build/bin/whisper-cli "
+                "and ~/FaisalClipFactory/whisper.cpp/models/ggml-base.en.bin."
+            )
 
         result = run_video_job(
             job_id=job_id,
