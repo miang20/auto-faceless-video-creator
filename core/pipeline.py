@@ -375,11 +375,13 @@ def run_video_processing(
         for item in original_timeline
     )
     source_pass_through = (
-        len(original_timeline) < 2
-        or (
-            source_duration > 0
-            and same_source_timeline
-            and selected_duration >= source_duration * 0.85
+        same_source_timeline
+        and (
+            len(original_timeline) < 2
+            or (
+                source_duration > 0
+                and selected_duration >= source_duration * 0.85
+            )
         )
     )
     needs_fallback = source_pass_through or (
