@@ -344,15 +344,6 @@ def run_video_processing(
     # disguise a single unedited source moment.
     original_timeline = [dict(item) for item in timeline]
     selected_clip_count = len(original_timeline)
-    captions_enabled = (
-        isinstance(caption_settings, dict)
-        and caption_settings.get("enabled", True) is not False
-    )
-    if captions_enabled and not any(str(item.get("text", "")).strip() for item in original_timeline):
-        raise RuntimeError(
-            "Caption validation failed: captions are enabled, but the selected timeline "
-            "contains no transcript text. Refusing to publish a captionless final."
-        )
 
     # Keep visual changes in a 2-5 second window unless the selected moment is shorter.
     timeline = _apply_visual_change_rhythm(
@@ -476,6 +467,16 @@ def run_video_processing(
         print(
             f"[V2 RENDER] Rebuilt timeline from {selected_clip_count} independent local moments "
             f"({fallback_total:.2f}s); pass-through source output blocked."
+        )
+
+    captions_enabled = (
+        isinstance(caption_settings, dict)
+        and caption_settings.get("enabled", True) is not False
+    )
+    if captions_enabled and not any(str(item.get("text", "")).strip() for item in timeline):
+        raise RuntimeError(
+            "Caption validation failed: captions are enabled, but the final selected timeline "
+            "contains no transcript text. Refusing to publish a captionless final."
         )
 
     editing = dict(editing_settings or {})
