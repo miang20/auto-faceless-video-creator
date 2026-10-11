@@ -161,16 +161,44 @@ def write_local_job(job: dict) -> Path:
 
 
 def find_existing_whisper_path() -> tuple[str | None, str | None]:
-    commands = [
-        HOME / "FaisalClipFactory" / "whisper.cpp" / "build" / "bin" / "whisper-cli",
-        HOME / "whisper.cpp" / "build" / "bin" / "whisper-cli",
-    ]
-    models = [
-        HOME / "FaisalClipFactory" / "whisper.cpp" / "models" / "ggml-small.bin",
-        HOME / "FaisalClipFactory" / "whisper.cpp" / "ggml-small.bin",
-        HOME / "whisper.cpp" / "models" / "ggml-small.bin",
-    ]
-    command = next((str(path) for path in commands if path.is_file()), None)
+    # runit services can start with an incomplete HOME environment. Resolve the
+    # Termux home from PREFIX as well as the process HOME so an installed
+    # Whisper binary remains discoverable under the service account.
+    homes: list[Path] = []
+    for raw in (
+        str(HOME),
+        os.environ.get("HOME", ""),
+        str(Path(os.environ.get("PREFIX", "/data/data/com.termux/files/usr")).parent / "home"),
+        "/data/data/com.termux/files/home",
+    ):
+        if raw:
+            candidate = Path(raw).expanduser()
+            if candidate not in homes:
+                homes.append(candidate)
+
+    commands: list[Path] = []
+    models: list[Path] = []
+    for home in homes:
+        roots = [home / "FaisalClipFactory" / "whisper.cpp", home / "whisper.cpp"]
+        for root in roots:
+            commands.extend([
+                root / "build" / "bin" / "whisper-cli",
+                root / "build" / "bin" / "main",
+            ])
+            for model_name in ("ggml-small.bin", "ggml-small.en.bin", "ggml-base.bin", "ggml-base.en.bin"):
+                models.extend([
+                    root / "models" / model_name,
+                    root / model_name,
+                    root / "build" / "bin" / model_name,
+                ])
+
+    command = next((str(path) for path in commands if path.is_file() and os.access(path, os.X_OK)), None)
+    if command is None:
+        for name in ("whisper-cli", "whisper", "main"):
+            from_path = shutil.which(name)
+            if from_path:
+                command = from_path
+                break
     model = next((str(path) for path in models if path.is_file()), None)
     return command, model
 
