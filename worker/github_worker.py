@@ -175,7 +175,7 @@ def find_existing_whisper_path() -> tuple[str | None, str | None]:
     return command, model
 
 
-def verify_final_mp4(path_value: str) -> dict:
+def verify_final_mp4(path_value: str, make_vertical: bool = True) -> dict:
     path = Path(path_value).expanduser()
     if not path.is_absolute():
         path = REPO_DIR / path
@@ -200,8 +200,12 @@ def verify_final_mp4(path_value: str) -> dict:
     stream = streams[0]
     width, height = int(stream.get("width", 0)), int(stream.get("height", 0))
     duration = float(fmt.get("duration", 0) or 0)
-    if (width, height) != (1080, 1920):
-        raise RuntimeError(f"Final MP4 is {width}x{height}, expected 1080x1920.")
+    expected_width, expected_height = (1080, 1920) if make_vertical else (1920, 1080)
+    if (width, height) != (expected_width, expected_height):
+        raise RuntimeError(
+            f"Final MP4 is {width}x{height}, expected {expected_width}x{expected_height} "
+            f"for {'vertical' if make_vertical else 'landscape'} output."
+        )
     if duration < 1.0:
         raise RuntimeError(f"Final MP4 duration is invalid: {duration:.2f}s.")
     return {
@@ -257,7 +261,8 @@ def process_job(remote_job: dict) -> None:
             or result.get("rendered_path")
             or ""
         ).strip()
-        verified = verify_final_mp4(final_path)
+        make_vertical = bool((job.get("editing_settings") or {}).get("make_vertical", True))
+        verified = verify_final_mp4(final_path, make_vertical=make_vertical)
         changes = {
             "status": "completed",
             "error": None,
