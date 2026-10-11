@@ -53,8 +53,30 @@ chmod 700 "$WORKER_TARGET"
 echo "[V2 DEPLOY] Updated local worker from the repository source."
 
 if command -v sv >/dev/null 2>&1 && [ -d "$SERVICE_DIR" ]; then
-  sv restart "$SERVICE_DIR"
-  echo "[V2 DEPLOY] Worker service restarted."
+  # "restart" can leave a runit service down when its persistent down flag
+  # is present. "up" explicitly clears that state and starts the service.
+  echo "[V2 DEPLOY] Bringing the worker service up..."
+  sv up "$SERVICE_DIR" || true
+  sleep 3
+  if sv status "$SERVICE_DIR" 2>&1 | grep -q '^run:'; then
+    echo "[V2 DEPLOY] Worker service is running."
+  else
+    echo "[V2 DEPLOY] Worker did not enter running state. Checking alternate service name..."
+    ALT_SERVICE_DIR="${PREFIX:-$HOME/../usr}/var/service/af-v2-worker"
+    if [ -d "$ALT_SERVICE_DIR" ]; then
+      sv up "$ALT_SERVICE_DIR" || true
+      sleep 3
+      if sv status "$ALT_SERVICE_DIR" 2>&1 | grep -q '^run:'; then
+        echo "[V2 DEPLOY] Alternate worker service is running: $ALT_SERVICE_DIR"
+      else
+        echo "[V2 DEPLOY] Neither worker service confirmed running."
+        sv status "$SERVICE_DIR" 2>&1 || true
+        sv status "$ALT_SERVICE_DIR" 2>&1 || true
+      fi
+    else
+      sv status "$SERVICE_DIR" 2>&1 || true
+    fi
+  fi
 else
   echo "[V2 DEPLOY] Code synced, but runit service was not found at $SERVICE_DIR."
   echo "[V2 DEPLOY] Worker restart was not attempted."
