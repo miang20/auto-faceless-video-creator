@@ -128,19 +128,10 @@ except Exception as exc:
     print(f"[V2 DEPLOY] Saved test job was unreadable; skipped: {exc}")
     raise SystemExit(0)
 
-error_text = str(job.get("error", ""))
-retryable_whisper_errors = (
-    "Whisper executable was not found",
-    "Whisper model was not found",
-    "model file not found",
-    "Whisper transcription failed",
-)
-if (
-    job.get("job_id") != job_id
-    or job.get("status") != "failed"
-    or not any(marker in error_text for marker in retryable_whisper_errors)
-):
-    print(f"[V2 DEPLOY] Saved test job was not a retryable Whisper failure (status={job.get('status')}); left unchanged.")
+# This script only targets the single known V2 test job. Retry it whenever
+# it is failed, because its error text can vary across Whisper/runtime versions.
+if job.get("job_id") != job_id or job.get("status") != "failed":
+    print(f"[V2 DEPLOY] Saved test job is not failed (status={job.get('status')}); left unchanged.")
     raise SystemExit(0)
 
 job["status"] = "queued"
