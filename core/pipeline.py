@@ -384,7 +384,18 @@ def run_video_processing(
         )
 
     editing = dict(editing_settings or {})
-    editing.setdefault("make_vertical", make_vertical)
+    output_format = str(editing.get("output_format", "")).strip().lower()
+    use_vertical = bool(editing.get("make_vertical", make_vertical))
+    if output_format in {"landscape", "long-form", "long_form", "16:9"}:
+        output_width, output_height = 1920, 1080
+        use_vertical = False
+    elif output_format in {"vertical", "shorts", "9:16"}:
+        output_width, output_height = 1080, 1920
+        use_vertical = True
+    else:
+        output_width, output_height = (1080, 1920) if use_vertical else (1920, 1080)
+    editing["make_vertical"] = use_vertical
+    editing["output_format"] = "vertical" if use_vertical else "landscape"
     editing.setdefault("audio_normalize", editing.get("normalize_audio", True))
     captions = dict(caption_settings or {})
     captions.setdefault("enabled", True)
@@ -394,6 +405,7 @@ def run_video_processing(
         script={"timeline": timeline, "target_duration": duration or 30},
         target_duration=duration, caption_style=caption_style,
         caption_settings=captions, editing_settings=editing,
+        output_width=output_width, output_height=output_height,
     )
     rendered_path = str(rendered_path or output_path)
     if not Path(rendered_path).is_file() or Path(rendered_path).stat().st_size <= 0:
