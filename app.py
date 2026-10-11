@@ -410,25 +410,35 @@ source_value = st.text_input(
     placeholder="https://www.youtube.com/watch?v=...",
 )
 
+output_choice = st.radio(
+    "Output Format",
+    ["Shorts / Vertical (9:16)", "Long-form / Landscape (16:9)"],
+    horizontal=True,
+    help="Choose vertical Shorts or a landscape YouTube video.",
+)
+is_vertical = output_choice.startswith("Shorts")
+default_duration = 30 if is_vertical else 360
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
     duration = st.number_input(
-        "Output Duration",
+        "Target Duration (seconds)",
         min_value=10,
-        max_value=180,
-        value=30,
-        step=5,
-        help="Target duration of the final video.",
+        max_value=600,
+        value=default_duration,
+        step=5 if is_vertical else 30,
+        help="Target final length. The source footage must contain enough usable material.",
     )
 
 with col2:
     max_clips = st.number_input(
-        "Max Clips",
+        "Max Clips / Sections",
         min_value=1,
-        max_value=20,
+        max_value=100,
         value=10,
         step=1,
+        help="Maximum selected sections for the edit.",
     )
 
 with col3:
@@ -539,7 +549,8 @@ with st.expander("🎞️ Editing Settings", expanded=True):
         "visual_change_rhythm": visual_change_rhythm,
         "max_visual_segment_seconds": 4.0,
         "smart_subject_tracking": True,
-        "make_vertical": True,
+        "make_vertical": is_vertical,
+        "output_format": "vertical" if is_vertical else "landscape",
         "punch_in": True,
         "audio_normalize": normalize_audio,
         "use_broll": contextual_broll,
