@@ -335,10 +335,59 @@ def run_video_processing(
             "path": clip_path, "start": start, "end": end,
             "duration": end - start,
             "text": str(clip.get("text") or clip.get("caption") or clip.get("caption_text") or clip.get("beat_text") or clip.get("transcript") or ""),
-            "role": clip.get("role", clip.get("story_role", "")),
+            "role": str(clip.get("role", clip.get("story_role", "")) or "").upper(),
             "score": clip.get("score", clip.get("final_score", 0)),
+            "hook_score": clip.get("hook_score", 0),
+            "reaction_score": clip.get("reaction_score", 0),
+            "visual_score": clip.get("visual_score", clip.get("motion_score", 0)),
+            "audio_score": clip.get("audio_score", 0),
         })
         prior_ranges.append((start, end))
+
+    # Put a footage-supported hook first. The chosen UI style changes which
+    # measurable signal wins; it never manufactures a scene or a claim.
+    hook_style = str((editing_settings or {}).get("hook_style", "Auto / Best for this footage")).lower()
+    if len(timeline) > 1:
+        def hook_rank(item):
+            def number(key):
+                try:
+                    return max(0.0, min(1.0, float(item.get(key, 0) or 0)))
+                except (TypeError, ValueError):
+                    return 0.0
+            text = str(item.get("text") or "").lower()
+            hook = number("hook_score")
+            visual = number("visual_score")
+            reaction = number("reaction_score")
+            audio = number("audio_score")
+            overall = number("score")
+            if "emotional human reaction" in hook_style:
+                style_score = reaction * 0.48 + audio * 0.18 + visual * 0.14 + hook * 0.10 + overall * 0.10
+            elif "immediate danger" in hook_style or "tension" in hook_style:
+                tension_words = ("danger", "fall", "hit", "crash", "fight", "almost", "near", "scream", "hurt", "run")
+                text_signal = 0.12 if any(word in text for word in tension_words) else 0.0
+                style_score = hook * 0.32 + visual * 0.28 + audio * 0.16 + overall * 0.12 + text_signal + reaction * 0.12
+            elif "curiosity gap" in hook_style or "question" in hook_style:
+                curiosity_words = ("why", "how", "what", "wait", "until", "secret", "then", "because", "?")
+                text_signal = 0.14 if any(word in text for word in curiosity_words) else 0.0
+                style_score = hook * 0.30 + overall * 0.22 + visual * 0.16 + audio * 0.12 + reaction * 0.06 + text_signal
+            elif "pov" in hook_style or "first-person" in hook_style:
+                pov_words = ("you", "your", "imagine", "when you", "if you")
+                text_signal = 0.14 if any(word in text for word in pov_words) else 0.0
+                style_score = visual * 0.26 + hook * 0.24 + reaction * 0.16 + overall * 0.14 + audio * 0.06 + text_signal
+            elif "payoff preview" in hook_style or "countdown" in hook_style or "unexpected" in hook_style:
+                style_score = hook * 0.34 + visual * 0.28 + reaction * 0.16 + audio * 0.10 + overall * 0.12
+            elif "cinematic" in hook_style or "suspense" in hook_style:
+                style_score = visual * 0.30 + audio * 0.22 + hook * 0.22 + overall * 0.16 + reaction * 0.10
+            else:
+                style_score = hook * 0.34 + visual * 0.22 + overall * 0.20 + audio * 0.12 + reaction * 0.12
+            if item.get("role") == "HOOK":
+                style_score += 0.06
+            return style_score
+
+        best_hook_index = max(range(len(timeline)), key=lambda index: hook_rank(timeline[index]))
+        best_hook = timeline.pop(best_hook_index)
+        best_hook["role"] = "HOOK"
+        timeline.insert(0, best_hook)
 
     # Preserve semantic selections before rhythm splitting so short cuts cannot
     # disguise a single unedited source moment.
