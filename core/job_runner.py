@@ -384,6 +384,40 @@ def run_video_job(
                 )
                 return result
 
+        # Final publication gate: validate edit evidence before copying anything
+        # into Android Movies/DCIM. A downloaded/re-encoded source is not a final.
+        processing = result.get("processing") if isinstance(result.get("processing"), dict) else {}
+        try:
+            selected_clips = int(processing.get("selected_clips", 0) or 0)
+            render_segments = int(processing.get("render_segments", 0) or 0)
+        except (TypeError, ValueError):
+            selected_clips, render_segments = 0, 0
+        final_path_value = str(
+            result.get("output_path")
+            or processing.get("output_path")
+            or processing.get("final_video")
+            or ""
+        ).strip()
+        source_path_value = str(result.get("source_video") or video_path or "").strip()
+        if selected_clips < 2 or render_segments < 2:
+            error = (
+                "Final publication blocked: fewer than two semantic clips or render segments "
+                "were verified. The original source must never be copied as the final video."
+            )
+            update_job_status(job_id=job_id, status="failed", error=error)
+            return {"success": False, "error": error}
+        if not final_path_value or not Path(final_path_value).is_file():
+            error = f"Final publication blocked: rendered MP4 is missing: {final_path_value or '(no path)'}"
+            update_job_status(job_id=job_id, status="failed", error=error)
+            return {"success": False, "error": error}
+        try:
+            if Path(final_path_value).resolve() == Path(source_path_value).resolve():
+                error = "Final publication blocked: output path resolves to the original downloaded source."
+                update_job_status(job_id=job_id, status="failed", error=error)
+                return {"success": False, "error": error}
+        except OSError:
+            pass
+
         phone_copy_path = _copy_final_video_to_phone(result, output_dir)
         if phone_copy_path:
             result["phone_copy_path"] = phone_copy_path
