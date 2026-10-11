@@ -5,6 +5,7 @@ REPO_DIR="$HOME/v2-test/repo"
 WORKER_DIR="$HOME/v2-test/worker"
 WORKER_TARGET="$WORKER_DIR/github_worker.py"
 SERVICE_DIR="${PREFIX:-$HOME/../usr}/var/service/faceless-worker"
+ALT_SERVICE_DIR="${PREFIX:-$HOME/../usr}/var/service/af-v2-worker"
 BACKUP_ROOT="$HOME/v2-deploy-backups"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$BACKUP_ROOT/$STAMP"
@@ -83,6 +84,21 @@ if command -v sv >/dev/null 2>&1 && [ -d "$SERVICE_DIR" ]; then
 else
   echo "[V2 DEPLOY] Code synced, but runit service was not found at $SERVICE_DIR."
   echo "[V2 DEPLOY] Worker restart was not attempted."
+fi
+
+# Enforce one worker owner: prefer faceless-worker, otherwise keep af-v2-worker.
+if [ "$SERVICE_READY" -eq 1 ]; then
+  if [ -d "$SERVICE_DIR" ] && sv status "$SERVICE_DIR" 2>&1 | grep -q '^run:'; then
+    if [ -d "$ALT_SERVICE_DIR" ]; then
+      sv down "$ALT_SERVICE_DIR" >/dev/null 2>&1 || true
+      echo "[V2 DEPLOY] Disabled duplicate worker service: $ALT_SERVICE_DIR"
+    fi
+  elif [ -d "$ALT_SERVICE_DIR" ] && sv status "$ALT_SERVICE_DIR" 2>&1 | grep -q '^run:'; then
+    if [ -d "$SERVICE_DIR" ]; then
+      sv down "$SERVICE_DIR" >/dev/null 2>&1 || true
+      echo "[V2 DEPLOY] Disabled duplicate worker service: $SERVICE_DIR"
+    fi
+  fi
 fi
 
 # Automatically retry the previously blocked Whisper test only after the worker
