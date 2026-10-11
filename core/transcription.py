@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -182,52 +183,77 @@ def find_whisper_command(
     whisper_command: Optional[str] = None,
 ) -> str:
     """
-    Find a Whisper executable.
-
-    Supported possibilities include:
-        whisper-cli
-        whisper
-        main
-
-    A custom command can also be supplied.
+    Find Whisper by explicit setting, PATH, or known local Termux installs.
     """
 
     if whisper_command:
-
-        resolved = shutil.which(
-            whisper_command
-        )
-
+        resolved = shutil.which(whisper_command)
         if resolved:
+            return resolved
+        explicit_path = Path(whisper_command).expanduser()
+        if explicit_path.is_file():
+            return str(explicit_path)
 
+    # Termux worker installs Whisper outside the repository. Resolve those
+    # known paths here so the pipeline still works when the worker's optional
+    # path discovery does not find the executable.
+    home = Path.home()
+    path_candidates = [
+        home / "FaisalClipFactory" / "whisper.cpp" / "build" / "bin" / "whisper-cli",
+        home / "FaisalClipFactory" / "whisper.cpp" / "build" / "bin" / "main",
+        home / "whisper.cpp" / "build" / "bin" / "whisper-cli",
+        home / "whisper.cpp" / "build" / "bin" / "main",
+    ]
+    for candidate in path_candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+
+    for candidate in ("whisper-cli", "whisper", "main"):
+        resolved = shutil.which(candidate)
+        if resolved:
             return resolved
 
-        if Path(
-            whisper_command
-        ).exists():
+    checked = ", ".join(str(path) for path in path_candidates)
+    raise RuntimeError(
+        "Whisper executable was not found in PATH or known Termux locations. "
+        f"Checked: {checked}"
+    )
 
-            return whisper_command
 
-    candidates = [
-        "whisper-cli",
-        "whisper",
-        "main",
+def find_whisper_model(model_path: Optional[str] = None) -> Optional[str]:
+    """Resolve the local Whisper model without requiring worker-side config."""
+
+    if model_path:
+        explicit_path = Path(model_path).expanduser()
+        if explicit_path.is_file():
+            return str(explicit_path)
+
+    home = Path.home()
+    roots = [
+        home / "FaisalClipFactory" / "whisper.cpp",
+        home / "whisper.cpp",
     ]
+    filenames = (
+        "ggml-small.bin",
+        "ggml-small.en.bin",
+        "ggml-base.en.bin",
+        "ggml-base.bin",
+    )
+    candidates = []
+    for root in roots:
+        for relative in (
+            Path("models"),
+            Path(""),
+            Path("build") / "bin",
+        ):
+            for filename in filenames:
+                candidates.append(root / relative / filename)
 
     for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
 
-        resolved = shutil.which(
-            candidate
-        )
-
-        if resolved:
-
-            return resolved
-
-    raise RuntimeError(
-        "Whisper executable was not found. "
-        "Provide whisper_command explicitly."
-    )
+    return None
 
 
 # =========================================================
@@ -331,6 +357,12 @@ def run_whisper(
     whisper = find_whisper_command(
         whisper_command
     )
+    resolved_model = find_whisper_model(model_path)
+    if not resolved_model:
+        raise RuntimeError(
+            "Whisper model was not found. Expected ggml-small.bin (or a supported "
+            "ggml model) under ~/FaisalClipFactory/whisper.cpp or ~/whisper.cpp."
+        )
 
     output = create_output_directory(
         output_dir
@@ -342,14 +374,12 @@ def run_whisper(
         str(audio),
     ]
 
-    if model_path:
-
-        command.extend(
-            [
-                "-m",
-                str(model_path),
-            ]
-        )
+    command.extend(
+        [
+            "-m",
+            str(resolved_model),
+        ]
+    )
 
     if language:
 
