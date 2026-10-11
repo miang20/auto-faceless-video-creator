@@ -910,9 +910,26 @@ def run_video_pipeline(
                     sequence_report.get("estimated_duration", 0),
                 )
             else:
-                print("[V2 SEQUENCE] No usable sequence; using original clips.")
+                # Never silently turn an invalid external selection into a montage
+                # of unrelated original clips. A failed story gate must fail closed.
+                print("[V2 SEQUENCE] Quality gate failed; refusing unrelated fallback footage.")
+                render_analysis = {
+                    "clips": [],
+                    "sequence": [],
+                    "sequence_report": sequence_report,
+                    "candidate_report": candidate_report,
+                    "quality_gate_failed": True,
+                    "quality_gate_reason": sequence_report.get("reason", "No valid coherent sequence"),
+                }
+                clip_analysis["sequence_report"] = sequence_report
         else:
-            print("[V2 SEQUENCE] Insufficient sections/beats; using original clips.")
+            print("[V2 SEQUENCE] Insufficient sections/beats; refusing unverified fallback footage.")
+            render_analysis = {
+                "clips": [],
+                "sequence": [],
+                "quality_gate_failed": True,
+                "quality_gate_reason": "Insufficient source sections or story beats",
+            }
 
     except Exception as integration_error:
         # Keep the story-timeline fallback already prepared above. Reverting
