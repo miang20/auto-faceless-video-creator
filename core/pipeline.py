@@ -340,10 +340,19 @@ def run_video_processing(
         })
         prior_ranges.append((start, end))
 
-    # Preserve the semantic selections before rhythm splitting so a single full-source
-    # clip cannot masquerade as a real edit just because it is cut into 4-second chunks.
+    # Preserve semantic selections before rhythm splitting so short cuts cannot
+    # disguise a single unedited source moment.
     original_timeline = [dict(item) for item in timeline]
     selected_clip_count = len(original_timeline)
+    captions_enabled = (
+        isinstance(caption_settings, dict)
+        and caption_settings.get("enabled", True) is not False
+    )
+    if captions_enabled and not any(str(item.get("text", "")).strip() for item in original_timeline):
+        raise RuntimeError(
+            "Caption validation failed: captions are enabled, but the selected timeline "
+            "contains no transcript text. Refusing to publish a captionless final."
+        )
 
     # Keep visual changes in a 2-5 second window unless the selected moment is shorter.
     timeline = _apply_visual_change_rhythm(
@@ -373,11 +382,7 @@ def run_video_processing(
         source_duration > 0
         and (
             len(original_timeline) < 2
-            or (
-                len(original_timeline) == 1
-                and (float(original_timeline[0].get("end", 0)) - float(original_timeline[0].get("start", 0)))
-                >= source_duration * 0.80
-            )
+            or selected_duration >= source_duration * 0.85
         )
     )
     needs_fallback = source_duration > 0 and (
@@ -424,15 +429,25 @@ def run_video_processing(
         fallback_candidates.sort(key=lambda item: float(item.get("score", 0)), reverse=True)
         fallback_timeline = []
         fallback_total = 0.0
-        for item in fallback_candidates:
-            if len(fallback_timeline) >= 12:
+        # Keep the fallback meaningfully shorter than the source and within the
+        # requested duration. Trim the final selected moment if it only partly fits.
+        source_budget = source_duration * 0.85 if source_duration > 0 else float("inf")
+        target_budget = requested * 1.20 if requested > 0 else float("inf")
+        total_budget = min(source_budget, target_budget)
+        for candidate in fallback_candidates:
+            if len(fallback_timeline) >= 12 or fallback_total >= total_budget:
                 break
-            if requested > 0 and fallback_total >= requested:
+            remaining = total_budget - fallback_total
+            if remaining < 1.0:
                 break
-            if requested > 0 and fallback_total + item["duration"] > requested * 1.20:
+            item = dict(candidate)
+            if float(item["duration"]) > remaining:
+                item["end"] = float(item["start"]) + remaining
+                item["duration"] = remaining
+            if item["duration"] < 1.0:
                 continue
             fallback_timeline.append(item)
-            fallback_total += item["duration"]
+            fallback_total += float(item["duration"])
         fallback_timeline.sort(key=lambda item: float(item["start"]))
 
         if fallback_timeline:
@@ -446,8 +461,9 @@ def run_video_processing(
                 for item in fallback_timeline
             )
         if (
-            len({(round(float(item["start"]), 2), round(float(item["end"]), 2)) for item in fallback_timeline}) < 2
+            len(fallback_timeline) < 2
             or (minimum_usable > 0 and fallback_total < minimum_usable)
+            or (source_duration > 0 and fallback_total >= source_duration * 0.90)
         ):
             raise RuntimeError(
                 "V2 edit validation blocked pass-through output: the selected story is too short "
@@ -456,7 +472,7 @@ def run_video_processing(
             )
 
         timeline = fallback_timeline
-        selected_clip_count = len(fallback_candidates)
+        selected_clip_count = len(fallback_timeline)
         print(
             f"[V2 RENDER] Rebuilt timeline from {selected_clip_count} independent local moments "
             f"({fallback_total:.2f}s); pass-through source output blocked."
