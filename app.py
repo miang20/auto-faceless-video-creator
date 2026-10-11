@@ -446,10 +446,44 @@ with col3:
         "Caption Style",
         [
             "Bold Viral",
-            "Clean",
-            "Minimal",
+            "Karaoke Word Highlight",
+            "MrBeast-Style Inspired",
+            "Cinematic Subtitles",
+            "Clean Minimal",
+            "Impact Punch",
         ],
+        help="Choose one of six rendering styles. The selected style is saved with this job.",
     )
+
+hook_style = st.selectbox(
+    "🎯 Hook Style — choose how the opening should make viewers feel",
+    [
+        "Auto / Best for this footage",
+        "POV — Put the viewer in the situation",
+        "Immediate danger or tension",
+        "Curiosity gap — What happens next?",
+        "Unexpected moment first",
+        "Emotional human reaction",
+        "Direct question to the viewer",
+        "Countdown to the payoff",
+        "Payoff preview, then context",
+        "Suspense / slow reveal",
+        "Challenge / impossible situation",
+        "Cinematic cold open",
+        "Relatable first-person scenario",
+    ],
+    help="The editor must choose a real matching moment from the footage; it must not invent an event that is not shown.",
+)
+
+voiceover_mode = st.selectbox(
+    "🎙️ Voice-over",
+    [
+        "Auto — decide from footage and original audio",
+        "Keep original audio; no added VO",
+        "Add narration when supported",
+    ],
+    help="Auto should prefer clear original dialogue/action audio and only request generated narration when a configured speech engine is available.",
+)
 
 
 # ============================================================
@@ -556,6 +590,12 @@ with st.expander("🎞️ Editing Settings", expanded=True):
         "use_broll": contextual_broll,
         "use_reactions": reaction_selection,
         "target_duration": int(duration),
+        "hook_style": hook_style,
+        "voiceover_mode": voiceover_mode,
+        "professional_finish": True,
+        "color_correction": True,
+        "sound_design": True,
+        "hook_requires_footage_match": True,
     }
 
 
