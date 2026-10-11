@@ -369,15 +369,21 @@ def run_video_processing(
     # A one-clip timeline covering almost the whole source is a pass-through edit,
     # not a ready-to-upload result. If the chosen sequence is too short or is
     # effectively the entire source, rebuild it from independent local clip candidates.
+    same_source_timeline = all(
+        Path(str(item.get("path") or source_path)).expanduser().resolve()
+        == Path(source_path).expanduser().resolve()
+        for item in original_timeline
+    )
     source_pass_through = (
-        source_duration > 0
-        and (
-            len(original_timeline) < 2
-            or selected_duration >= source_duration * 0.85
+        len(original_timeline) < 2
+        or (
+            source_duration > 0
+            and same_source_timeline
+            and selected_duration >= source_duration * 0.85
         )
     )
-    needs_fallback = source_duration > 0 and (
-        selected_duration < minimum_usable or source_pass_through
+    needs_fallback = source_pass_through or (
+        source_duration > 0 and selected_duration < minimum_usable
     )
 
     if needs_fallback:
@@ -441,6 +447,7 @@ def run_video_processing(
             fallback_total += float(item["duration"])
         fallback_timeline.sort(key=lambda item: float(item["start"]))
 
+        fallback_semantic_count = len(fallback_timeline)
         if fallback_timeline:
             fallback_timeline = _apply_visual_change_rhythm(
                 fallback_timeline,
@@ -452,7 +459,7 @@ def run_video_processing(
                 for item in fallback_timeline
             )
         if (
-            len(fallback_timeline) < 2
+            fallback_semantic_count < 2
             or (minimum_usable > 0 and fallback_total < minimum_usable)
             or (source_duration > 0 and fallback_total >= source_duration * 0.90)
         ):
@@ -463,7 +470,7 @@ def run_video_processing(
             )
 
         timeline = fallback_timeline
-        selected_clip_count = len(fallback_timeline)
+        selected_clip_count = fallback_semantic_count
         print(
             f"[V2 RENDER] Rebuilt timeline from {selected_clip_count} independent local moments "
             f"({fallback_total:.2f}s); pass-through source output blocked."
