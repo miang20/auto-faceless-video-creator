@@ -371,9 +371,14 @@ def run_video_processing(
     # effectively the entire source, rebuild it from independent local clip candidates.
     source_pass_through = (
         source_duration > 0
-        and len(original_timeline) == 1
-        and (float(original_timeline[0].get("end", 0)) - float(original_timeline[0].get("start", 0)))
-        >= source_duration * 0.80
+        and (
+            len(original_timeline) < 2
+            or (
+                len(original_timeline) == 1
+                and (float(original_timeline[0].get("end", 0)) - float(original_timeline[0].get("start", 0)))
+                >= source_duration * 0.80
+            )
+        )
     )
     needs_fallback = source_duration > 0 and (
         selected_duration < minimum_usable or source_pass_through
