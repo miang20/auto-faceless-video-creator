@@ -340,9 +340,10 @@ def run_video_processing(
         })
         prior_ranges.append((start, end))
 
-    # Report original selected moments separately from the smaller render segments
-    # created by visual-change rhythm. This keeps job metrics/contracts stable.
-    selected_clip_count = len(timeline)
+    # Preserve the semantic selections before rhythm splitting so a single full-source
+    # clip cannot masquerade as a real edit just because it is cut into 4-second chunks.
+    original_timeline = [dict(item) for item in timeline]
+    selected_clip_count = len(original_timeline)
 
     # Keep visual changes in a 2-5 second window unless the selected moment is shorter.
     timeline = _apply_visual_change_rhythm(
@@ -363,29 +364,97 @@ def run_video_processing(
         source_duration = 0.0
 
     selected_duration = sum(max(0.0, float(item.get("end", 0)) - float(item.get("start", 0))) for item in timeline)
-    # Never render a tiny external-sequence fragment when the selected sequence
-    # cannot reasonably satisfy the requested duration. Fall back to the full
-    # reference source (without looping or padding) instead.
     minimum_usable = min(requested * 0.65, source_duration * 0.80) if requested and source_duration else 0.0
-    if source_duration > 0 and selected_duration < minimum_usable:
-        fallback_text = " ".join(
-            str(item.get("text", "")).strip()
-            for item in timeline
-            if str(item.get("text", "")).strip()
-        ).strip()
-        timeline = [{
-            "path": source_path,
-            "start": 0.0,
-            "end": source_duration,
-            "duration": source_duration,
-            "text": fallback_text,
-            "role": "MAIN",
-            "score": 0,
-        }]
-        selected_clip_count = 1
+
+    # A one-clip timeline covering almost the whole source is a pass-through edit,
+    # not a ready-to-upload result. If the chosen sequence is too short or is
+    # effectively the entire source, rebuild it from independent local clip candidates.
+    source_pass_through = (
+        source_duration > 0
+        and len(original_timeline) == 1
+        and (float(original_timeline[0].get("end", 0)) - float(original_timeline[0].get("start", 0)))
+        >= source_duration * 0.80
+    )
+    needs_fallback = source_duration > 0 and (
+        selected_duration < minimum_usable or source_pass_through
+    )
+
+    if needs_fallback:
+        raw_fallback = (
+            clip_analysis.get("clips", [])
+            if isinstance(clip_analysis, dict) else []
+        )
+        fallback_candidates = []
+        for item in raw_fallback:
+            if not isinstance(item, dict):
+                continue
+            try:
+                start = max(0.0, float(item.get("start", item.get("start_time", 0))))
+                end_value = item.get("end", item.get("end_time"))
+                if end_value is None:
+                    end_value = start + float(item.get("duration", 0))
+                end = min(source_duration, float(end_value))
+            except (TypeError, ValueError):
+                continue
+            if end <= start or end - start < 1.0:
+                continue
+            if any(
+                start < prior_end - 0.02 and end > prior_start + 0.02
+                for prior_start, prior_end in [
+                    (float(x["start"]), float(x["end"])) for x in fallback_candidates
+                ]
+            ):
+                continue
+            fallback_candidates.append({
+                "path": source_path,
+                "start": start,
+                "end": end,
+                "duration": end - start,
+                "text": str(item.get("text") or item.get("transcript") or item.get("caption") or ""),
+                "role": str(item.get("story_role") or item.get("role") or "MAIN"),
+                "score": float(item.get("score", item.get("final_score", 0)) or 0),
+            })
+
+        # Prefer the highest-scoring moments, then restore source chronology.
+        fallback_candidates.sort(key=lambda item: float(item.get("score", 0)), reverse=True)
+        fallback_timeline = []
+        fallback_total = 0.0
+        for item in fallback_candidates:
+            if len(fallback_timeline) >= 12:
+                break
+            if requested > 0 and fallback_total >= requested:
+                break
+            if requested > 0 and fallback_total + item["duration"] > requested * 1.20:
+                continue
+            fallback_timeline.append(item)
+            fallback_total += item["duration"]
+        fallback_timeline.sort(key=lambda item: float(item["start"]))
+
+        if fallback_timeline:
+            fallback_timeline = _apply_visual_change_rhythm(
+                fallback_timeline,
+                enabled=bool((editing_settings or {}).get("visual_change_rhythm", True)),
+                max_segment_seconds=(editing_settings or {}).get("max_visual_segment_seconds", 4.0),
+            )
+            fallback_total = sum(
+                max(0.0, float(item["end"]) - float(item["start"]))
+                for item in fallback_timeline
+            )
+        if (
+            len({(round(float(item["start"]), 2), round(float(item["end"]), 2)) for item in fallback_timeline}) < 2
+            or (minimum_usable > 0 and fallback_total < minimum_usable)
+        ):
+            raise RuntimeError(
+                "V2 edit validation blocked pass-through output: the selected story is too short "
+                "or lacks at least two independent source moments. No unedited source will be "
+                "copied as the final video. Check transcription/clip-analysis artifacts."
+            )
+
+        timeline = fallback_timeline
+        selected_clip_count = len(fallback_candidates)
         print(
-            f"[V2 RENDER] Selected timeline too short ({selected_duration:.2f}s); "
-            f"using full source ({source_duration:.2f}s) instead."
+            f"[V2 RENDER] Rebuilt timeline from {selected_clip_count} independent local moments "
+            f"({fallback_total:.2f}s); pass-through source output blocked."
         )
 
     editing = dict(editing_settings or {})
@@ -685,6 +754,7 @@ def run_video_pipeline(
         # or scale timestamps independently, both of which break the edit.
         render_analysis = {
             "sequence": story_timeline,
+            "clips": clip_analysis.get("clips", []) if isinstance(clip_analysis, dict) else [],
             "story_blueprint": script,
         }
 
@@ -771,6 +841,9 @@ def run_video_pipeline(
                 selected_sequence = sequence_report["sequence"]
                 render_analysis = {
                     "sequence": selected_sequence,
+                    # Keep the independently analyzed local-source candidates
+                    # available if external-source selection is too short or invalid.
+                    "clips": clip_analysis.get("clips", []),
                     "sequence_report": sequence_report,
                     "candidate_report": candidate_report,
                 }
