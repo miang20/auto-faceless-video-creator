@@ -340,6 +340,10 @@ def run_video_processing(
         })
         prior_ranges.append((start, end))
 
+    # Report original selected moments separately from the smaller render segments
+    # created by visual-change rhythm. This keeps job metrics/contracts stable.
+    selected_clip_count = len(timeline)
+
     # Keep visual changes in a 2-5 second window unless the selected moment is shorter.
     timeline = _apply_visual_change_rhythm(
         timeline,
@@ -347,7 +351,7 @@ def run_video_processing(
         max_segment_seconds=(editing_settings or {}).get("max_visual_segment_seconds", 4.0),
     )
 
-    print(f"[VIDEO PROCESSOR] Selected clips: {len(timeline)}")
+    print(f"[VIDEO PROCESSOR] Selected clips: {selected_clip_count}; render segments: {len(timeline)}")
     print(f"[VIDEO PROCESSOR] Distinct source files: {len({x['path'] for x in timeline})}")
     if not timeline:
         raise ValueError("No usable clips found: candidate paths/timestamps were invalid.")
@@ -378,6 +382,7 @@ def run_video_processing(
             "role": "MAIN",
             "score": 0,
         }]
+        selected_clip_count = 1
         print(
             f"[V2 RENDER] Selected timeline too short ({selected_duration:.2f}s); "
             f"using full source ({source_duration:.2f}s) instead."
@@ -421,7 +426,8 @@ def run_video_processing(
         "success": True, "output_path": rendered_path,
         "final_video": rendered_path, "result_path": rendered_path,
         "size_bytes": Path(rendered_path).stat().st_size,
-        "selected_clips": len(timeline),
+        "selected_clips": selected_clip_count,
+        "render_segments": len(timeline),
         "distinct_source_files": len({x["path"] for x in timeline}),
     }
 
