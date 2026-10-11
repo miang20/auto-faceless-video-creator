@@ -8,6 +8,7 @@ SERVICE_DIR="${PREFIX:-$HOME/../usr}/var/service/faceless-worker"
 BACKUP_ROOT="$HOME/v2-deploy-backups"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$BACKUP_ROOT/$STAMP"
+SERVICE_READY=0
 
 if [ ! -d "$REPO_DIR/.git" ]; then
   echo "[V2 DEPLOY] Repository not found at $REPO_DIR"
@@ -60,6 +61,7 @@ if command -v sv >/dev/null 2>&1 && [ -d "$SERVICE_DIR" ]; then
   sleep 3
   if sv status "$SERVICE_DIR" 2>&1 | grep -q '^run:'; then
     echo "[V2 DEPLOY] Worker service is running."
+    SERVICE_READY=1
   else
     echo "[V2 DEPLOY] Worker did not enter running state. Checking alternate service name..."
     ALT_SERVICE_DIR="${PREFIX:-$HOME/../usr}/var/service/af-v2-worker"
@@ -68,6 +70,7 @@ if command -v sv >/dev/null 2>&1 && [ -d "$SERVICE_DIR" ]; then
       sleep 3
       if sv status "$ALT_SERVICE_DIR" 2>&1 | grep -q '^run:'; then
         echo "[V2 DEPLOY] Alternate worker service is running: $ALT_SERVICE_DIR"
+        SERVICE_READY=1
       else
         echo "[V2 DEPLOY] Neither worker service confirmed running."
         sv status "$SERVICE_DIR" 2>&1 || true
@@ -80,6 +83,80 @@ if command -v sv >/dev/null 2>&1 && [ -d "$SERVICE_DIR" ]; then
 else
   echo "[V2 DEPLOY] Code synced, but runit service was not found at $SERVICE_DIR."
   echo "[V2 DEPLOY] Worker restart was not attempted."
+fi
+
+# Automatically retry the previously blocked Whisper test only after the worker
+# is confirmed running. This avoids asking the user to manually create a job.
+if [ "$SERVICE_READY" -eq 1 ]; then
+  TOKEN_FILE="${PREFIX:-$HOME/../usr}/var/service/af-v2-worker/env/GITHUB_TOKEN"
+  if [ -s "$TOKEN_FILE" ]; then
+    python - "$TOKEN_FILE" "$REPO_DIR" <<'PY'
+import base64
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+token_file, repo_dir = Path(sys.argv[1]), Path(sys.argv[2])
+token = token_file.read_text(encoding="utf-8").strip()
+if not token:
+    print("[V2 DEPLOY] GitHub token file is empty; automatic test retry skipped.")
+    raise SystemExit(0)
+
+job_id = "v2_6c3f1b9e8a21"
+api = f"https://api.github.com/repos/miang20/auto-faceless-video-creator/contents/jobs/{job_id}.json"
+headers = {
+    "Authorization": f"Bearer {token}",
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "Content-Type": "application/json",
+}
+request = urllib.request.Request(api + "?ref=main", headers=headers)
+try:
+    with urllib.request.urlopen(request, timeout=25) as response:
+        current = json.load(response)
+except Exception as exc:
+    print(f"[V2 DEPLOY] Could not read the saved test job; skipped: {exc}")
+    raise SystemExit(0)
+
+try:
+    job = json.loads(base64.b64decode(current["content"]).decode("utf-8"))
+except Exception as exc:
+    print(f"[V2 DEPLOY] Saved test job was unreadable; skipped: {exc}")
+    raise SystemExit(0)
+
+if job.get("job_id") != job_id or job.get("status") != "failed" or "Whisper executable was not found" not in str(job.get("error", "")):
+    print(f"[V2 DEPLOY] Saved test job was not the expected Whisper failure (status={job.get('status')}); left unchanged.")
+    raise SystemExit(0)
+
+job["status"] = "queued"
+job["error"] = None
+job["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+payload = {
+    "message": f"Retry V2 test job {job_id} after worker startup and Whisper fixes",
+    "content": base64.b64encode((json.dumps(job, indent=2, ensure_ascii=False) + "\\n").encode("utf-8")).decode("ascii"),
+    "sha": current["sha"],
+    "branch": "main",
+}
+request = urllib.request.Request(api, data=json.dumps(payload).encode("utf-8"), headers=headers, method="PUT")
+try:
+    with urllib.request.urlopen(request, timeout=25) as response:
+        if response.status not in (200, 201):
+            raise RuntimeError(f"GitHub returned HTTP {response.status}")
+    local = repo_dir / "jobs" / f"{job_id}.json"
+    local.write_text(json.dumps(job, indent=2, ensure_ascii=False) + "\\n", encoding="utf-8")
+    print(f"[V2 DEPLOY] Automatically re-queued test job {job_id}; worker will pick it up.")
+except Exception as exc:
+    print(f"[V2 DEPLOY] Could not re-queue test job automatically: {exc}")
+PY
+  else
+    echo "[V2 DEPLOY] Worker is running, but token file was not found; automatic test retry skipped."
+  fi
+else
+  echo "[V2 DEPLOY] Worker is not confirmed running; saved test job was left untouched."
 fi
 
 echo "[V2 DEPLOY] Deployment step finished. Refresh Auto Faceless Studio V2."
