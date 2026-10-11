@@ -299,6 +299,19 @@ def process_job(remote_job: dict) -> None:
             detail = result.get("error", "Pipeline returned no successful result.") if isinstance(result, dict) else "Pipeline returned an invalid result."
             raise RuntimeError(str(detail))
 
+        # Require evidence of a real edit, not merely a valid re-encoded source file.
+        processing = result.get("processing") if isinstance(result.get("processing"), dict) else {}
+        try:
+            selected_clips = int(processing.get("selected_clips", 0) or 0)
+            render_segments = int(processing.get("render_segments", 0) or 0)
+        except (TypeError, ValueError):
+            selected_clips, render_segments = 0, 0
+        if selected_clips < 2 or render_segments < 2:
+            raise RuntimeError(
+                "Final render rejected: pipeline did not prove at least two selected story clips "
+                "and two rendered segments. Original-source/pass-through output is not publishable."
+            )
+
         final_path = str(
             result.get("output_path")
             or result.get("final_video")
