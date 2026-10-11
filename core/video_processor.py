@@ -816,6 +816,12 @@ def _build_video_filter(
         )
     )
 
+    # Apply restrained, broadcast-safe finishing after crop and before captions.
+    # It is intentionally subtle so source footage does not become oversaturated.
+    if bool(editing_settings.get("color_correction", True)):
+        filters.append("eq=contrast=1.04:saturation=1.06:brightness=0.005")
+        filters.append("unsharp=5:5:0.30:3:3:0.10")
+
     dynamic_zoom = bool(
         editing_settings.get(
             "dynamic_zoom",
