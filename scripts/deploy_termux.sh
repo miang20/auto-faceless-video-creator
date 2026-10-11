@@ -137,7 +137,7 @@ job["error"] = None
 job["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 payload = {
     "message": f"Retry V2 test job {job_id} after worker startup and Whisper fixes",
-    "content": base64.b64encode((json.dumps(job, indent=2, ensure_ascii=False) + "\\n").encode("utf-8")).decode("ascii"),
+    "content": base64.b64encode((json.dumps(job, indent=2, ensure_ascii=False) + "\n").encode("utf-8")).decode("ascii"),
     "sha": current["sha"],
     "branch": "main",
 }
@@ -147,7 +147,7 @@ try:
         if response.status not in (200, 201):
             raise RuntimeError(f"GitHub returned HTTP {response.status}")
     local = repo_dir / "jobs" / f"{job_id}.json"
-    local.write_text(json.dumps(job, indent=2, ensure_ascii=False) + "\\n", encoding="utf-8")
+    local.write_text(json.dumps(job, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"[V2 DEPLOY] Automatically re-queued test job {job_id}; worker will pick it up.")
 except Exception as exc:
     print(f"[V2 DEPLOY] Could not re-queue test job automatically: {exc}")
