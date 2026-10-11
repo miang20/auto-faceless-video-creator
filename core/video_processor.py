@@ -404,15 +404,27 @@ def _dynamic_caption_filters(
 
     font_size = max(24, min(110, _safe_int(caption_settings.get("font_size", 58), 58)))
     style = _clean_text(caption_settings.get("style", "Bold Viral")).lower()
+    style_aliases = {
+        "karaoke word highlight": "karaoke",
+        "mrbeast-style inspired": "mrbeast-style inspired",
+        "cinematic subtitles": "cinematic",
+        "clean minimal": "clean",
+        "impact punch": "impact",
+    }
+    style = style_aliases.get(style, style)
     if style == "impact":
         font_size = max(font_size, 64)
+    elif style == "mrbeast-style inspired":
+        font_size = max(font_size, 60)
 
     stroke = bool(caption_settings.get("stroke", True))
     shadow = bool(caption_settings.get("shadow", True))
     box = bool(caption_settings.get("box", caption_settings.get("background_box", False)))
-    if style == "clean":
-        stroke = False
-        shadow = False
+    if style in {"clean", "cinematic"}:
+        stroke = style != "cinematic" and stroke
+        shadow = style != "cinematic" and shadow
+        if style == "cinematic":
+            box = True
 
     normal_color = _ffmpeg_caption_color(caption_settings.get("text_color", "white"), "white")
     active_color = _ffmpeg_caption_color(caption_settings.get("highlight_color", "yellow"), "yellow")
@@ -457,9 +469,11 @@ def _dynamic_caption_filters(
         parts.append(f"enable='gte(t\\,{start:.3f})*lt(t\\,{end:.3f})'")
         return "=".join(parts[:1]) + "=" + ":".join(parts[1:])
 
-    # Group up to three words together. A yellow overlay advances word by word.
-    for group_start in range(0, len(words), 3):
-        group = words[group_start:group_start + 3]
+    # Cinematic subtitles use phrase-level captions; viral styles use active-word emphasis.
+    words_per_group = 6 if style == "cinematic" else 3
+    use_active_word = style not in {"cinematic", "clean"}
+    for group_start in range(0, len(words), words_per_group):
+        group = words[group_start:group_start + words_per_group]
         first_index = group_start
         last_index = group_start + len(group)
         group_start_time = first_index * word_step
@@ -472,14 +486,15 @@ def _dynamic_caption_filters(
         phrase_x = f"(w-{phrase_width:.1f})/2"
         filters.append(drawtext(phrase, normal_color, phrase_x, group_start_time, group_end_time))
 
-        prefix_width = 0.0
-        for offset, word in enumerate(group):
-            word_index = group_start + offset
-            word_start = word_index * word_step
-            word_end = min(duration, (word_index + 1) * word_step)
-            word_x = f"(w-{phrase_width:.1f})/2+{prefix_width:.1f}"
-            filters.append(drawtext(word, active_color, word_x, word_start, word_end))
-            prefix_width += max(1, len(word)) * font_size * 0.54 + font_size * 0.32
+        if use_active_word:
+            prefix_width = 0.0
+            for offset, word in enumerate(group):
+                word_index = group_start + offset
+                word_start = word_index * word_step
+                word_end = min(duration, (word_index + 1) * word_step)
+                word_x = f"(w-{phrase_width:.1f})/2+{prefix_width:.1f}"
+                filters.append(drawtext(word, active_color, word_x, word_start, word_end))
+                prefix_width += max(1, len(word)) * font_size * 0.54 + font_size * 0.32
 
     return filters
 
