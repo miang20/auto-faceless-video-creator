@@ -223,10 +223,14 @@ def find_whisper_command(
 def find_whisper_model(model_path: Optional[str] = None) -> Optional[str]:
     """Resolve the local Whisper model without requiring worker-side config."""
 
-    if model_path:
-        explicit_path = Path(model_path).expanduser()
+    # Prefer the worker-provided model, then the service environment.
+    # Resolve relative paths against the current process directory, but never
+    # return a relative path to whisper.cpp.
+    configured = model_path or os.environ.get("WHISPER_MODEL")
+    if configured:
+        explicit_path = Path(configured).expanduser()
         if explicit_path.is_file():
-            return str(explicit_path)
+            return str(explicit_path.resolve())
 
     home = Path.home()
     roots = [
@@ -251,7 +255,7 @@ def find_whisper_model(model_path: Optional[str] = None) -> Optional[str]:
 
     for candidate in candidates:
         if candidate.is_file():
-            return str(candidate)
+            return str(candidate.resolve())
 
     return None
 
@@ -368,18 +372,21 @@ def run_whisper(
         output_dir
     )
 
-    command = [
-        whisper,
-        "-f",
-        str(audio),
-    ]
+    # Use absolute paths and pass the model before the input file so
+    # whisper.cpp cannot silently fall back to its relative default model.
+    resolved_audio = audio.resolve()
+    resolved_output = output.resolve()
+    resolved_model = str(Path(resolved_model).expanduser().resolve())
+    if not Path(resolved_model).is_file():
+        raise RuntimeError(f"Resolved Whisper model does not exist: {resolved_model}")
 
-    command.extend(
-        [
-            "-m",
-            str(resolved_model),
-        ]
-    )
+    command = [
+        str(Path(whisper).expanduser().resolve()),
+        "-m",
+        resolved_model,
+        "-f",
+        str(resolved_audio),
+    ]
 
     if language:
 
@@ -397,7 +404,7 @@ def run_whisper(
             "-otxt",
             "-of",
             str(
-                output
+                resolved_output
                 / audio.stem
             ),
         ]
@@ -421,8 +428,9 @@ def run_whisper(
         )
 
         raise RuntimeError(
-            "Whisper transcription failed: "
-            + error
+            "Whisper transcription failed. "
+            f"Executable={whisper!r}; model={resolved_model!r}; "
+            f"command={command!r}; detail={error}"
         ) from exc
 
     return {
