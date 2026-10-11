@@ -820,7 +820,7 @@ def _build_video_filter(
         filters.append(
             "zoompan=z='min(zoom+0.0008,1.08)':d=1:"
             "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            "s=1080x1920:fps=30"
+            f"s={output_width}x{output_height}:fps=30"
         )
 
     if caption_settings and caption_text:
