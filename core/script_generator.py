@@ -385,9 +385,9 @@ def _build_edit_instruction(
 
     if role == "HOOK":
         return (
-            "Open immediately on the strongest visual/audio moment. "
-            "No intro. No logo. No dead air. "
-            "Use the most surprising frame first, then let the context catch up."
+            "Open immediately on the strongest footage-supported moment. "
+            "No intro, logo, or dead air. Make the viewer feel present in the situation. "
+            "Never describe danger, emotion, a question, or a payoff that the selected footage does not support."
         )
 
     if role == "SETUP":
@@ -568,9 +568,21 @@ def generate_script(
     editing = dict(
         editing_settings or {}
     )
+    hook_style = _clean_text(editing.get("hook_style") or "Auto / Best for this footage")
+    voiceover_mode = _clean_text(editing.get("voiceover_mode") or "Auto — decide from footage and original audio")
+    voiceover_policy = {
+        "mode": voiceover_mode,
+        "preserve_original_audio": True,
+        "avoid_forcing_narration": True,
+        "narration_text": "",
+        "status": "not_generated",
+        "reason": "No configured narration-generation and speech-synthesis engine is connected to this renderer yet.",
+    }
 
     output = {
         "topic": _clean_text(topic),
+        "hook_style": hook_style,
+        "voiceover_policy": voiceover_policy,
         "target_duration": round(
             max(
                 5.0,
@@ -586,6 +598,11 @@ def generate_script(
         ),
         "format": "9:16",
         "narration": False,
+        "hook_strategy": {
+            "selected_style": hook_style,
+            "instruction": "Choose the strongest real opening moment matching this style; do not fabricate events or claims.",
+            "requires_footage_match": True,
+        },
         "story_structure": [
             item["role"]
             for item in timeline
