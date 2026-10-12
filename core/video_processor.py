@@ -238,6 +238,7 @@ def _normalize_clip(
         "text": _clean_text(
             clip.get("text")
         ),
+        "hook_text": _clean_text(clip.get("hook_text", "")),
     }
 
 
@@ -739,6 +740,7 @@ def _vertical_crop_filter(
     output_width: int,
     output_height: int,
     subject_track: Optional[List[Tuple[float, float]]] = None,
+    hook_text: str = "",
 ) -> str:
 
     if width <= 0 or height <= 0:
@@ -837,11 +839,33 @@ def _build_video_filter(
     )
 
     if dynamic_zoom and punch_in:
-        # Actual slow punch-in; output stays 1080x1920 at a fixed 30 fps.
+        # Slow, restrained push-in; keep a stable output canvas.
         filters.append(
             "zoompan=z='min(zoom+0.0008,1.08)':d=1:"
             "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
             f"s={output_width}x{output_height}:fps=30"
+        )
+
+    if bool(editing_settings.get("impact_shake", False)):
+        # Micro-shake is restricted to impact/reaction beats by the caller.
+        # Overscan crop avoids black corners and keeps the output dimensions fixed.
+        filters.append(
+            "crop=iw-12:ih-12:x='6+2*sin(t*18)':y='6+2*cos(t*15)',"
+            f"scale={output_width}:{output_height}"
+        )
+
+    if hook_text and caption_text_dir:
+        hook_file = os.path.join(caption_text_dir, "hook_overlay.txt")
+        with open(hook_file, "w", encoding="utf-8", newline="") as handle:
+            handle.write(_clean_text(hook_text).replace("\\", " ").replace("\n", " "))
+        font = _find_font_file("DejaVuSans-Bold")
+        font_option = f"fontfile='{_escape_drawtext(font)}'" if font else "font='DejaVu Sans'"
+        filters.append(
+            "drawtext=" + font_option
+            + ":textfile='" + _escape_drawtext(hook_file) + "'"
+            + ":fontcolor=white:fontsize=68:borderw=4:bordercolor=black"
+            + ":box=1:boxcolor=black@0.58:boxborderw=18"
+            + ":x=(w-text_w)/2:y=h*0.16:enable='between(t,0,1.65)'"
         )
 
     if caption_settings and caption_text:
@@ -923,9 +947,8 @@ def _render_single_segment(
 
     caption_text_dir = None
     if (
-        caption_settings
-        and caption_settings.get("enabled", True) is not False
-        and _clean_text(clip.get("text", ""))
+        (caption_settings and caption_settings.get("enabled", True) is not False and _clean_text(clip.get("text", "")))
+        or _clean_text(clip.get("hook_text", ""))
     ):
         caption_text_dir = tempfile.mkdtemp(prefix="v2-caption-")
 
@@ -941,17 +964,25 @@ def _render_single_segment(
             output_height=output_height,
         )
 
+    segment_editing = dict(editing_settings)
+    role = str(clip.get("role") or "").upper()
+    segment_editing["impact_shake"] = bool(
+        editing_settings.get("impact_shake", True)
+        and role in {"HOOK", "REACTION", "PAYOFF"}
+    )
+
     video_filter = _build_video_filter(
         width,
         height,
         output_width,
         output_height,
         effective_duration,
-        editing_settings,
+        segment_editing,
         caption_settings,
         caption_text=_clean_text(clip.get("text", "")),
         caption_text_dir=caption_text_dir,
         subject_track=subject_track,
+        hook_text=_clean_text(clip.get("hook_text", "")),
     )
 
     video_filter = _normalize_drawtext_filter(video_filter)
