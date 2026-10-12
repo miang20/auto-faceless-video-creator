@@ -92,7 +92,7 @@ def build_retention_plan(timeline: list[dict], target_duration: float = 30.0) ->
             "role": role,
             "duration_budget_seconds": round(duration, 2),
             "retention_purpose": purpose,
-            "source_text": re.sub(r"\\s+", " ", str(item.get("text") or "")).strip()[:180],
+            "source_text": re.sub(r"\s+", " ", str(item.get("text") or "")).strip()[:180],
         })
     return {
         "model": "hook-context-escalation-open-loop-payoff",
