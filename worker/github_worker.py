@@ -264,6 +264,12 @@ def process_job(remote_job: dict) -> None:
     log("JOB FOUND:", job_id, "URL:", job.get("input_value"))
 
     try:
+        # A long-running worker can retain old core.* modules in sys.modules
+        # after the repository is updated on disk. Reload project modules for
+        # each job so rendering fixes are picked up without a worker reboot.
+        for module_name in tuple(sys.modules):
+            if module_name == "core" or module_name.startswith("core."):
+                del sys.modules[module_name]
         from core.job_runner import run_video_job
 
         whisper_command, model_path = find_existing_whisper_path()
