@@ -1,7 +1,7 @@
 {
   "job_id": "v2_31360cfb5fb2",
   "created_at": "2026-10-12T00:34:25.937159+00:00",
-  "status": "queued",
+  "status": "running",
   "pipeline": "video",
   "pipeline_version": "2.0",
   "input_value": "https://youtube.com/shorts/blpgVqH3llw?si=H5HTv52TKtJ5YYEL",
@@ -48,5 +48,7 @@
     "color_correction": true,
     "sound_design": true,
     "hook_requires_footage_match": true
-  }
+  },
+  "error": null,
+  "updated_at": "2026-10-12T00:34:35.052750Z"
 }
