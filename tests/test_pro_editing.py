@@ -23,6 +23,29 @@ class ProEditingTests(unittest.TestCase):
         self.assertEqual(plan["beats"][0]["role"], "HOOK")
         self.assertIn("never fabricated", plan["rules"][1])
 
+    def test_dynamic_captions_do_not_double_draw_active_words(self):
+        import tempfile
+        from core.video_processor import _dynamic_caption_filters
+
+        with tempfile.TemporaryDirectory() as directory:
+            filters = _dynamic_caption_filters(
+                "One two three four five six",
+                3.0,
+                {"enabled": True, "style": "Bold Viral"},
+                textfile_dir=directory,
+            )
+        # Two 3-word phrase groups should create two drawtext filters, not
+        # a phrase plus one overlay per active word.
+        self.assertEqual(len(filters), 2)
+        self.assertTrue(all("drawtext=" in item for item in filters))
+
+    def test_dynamic_captions_can_be_disabled(self):
+        from core.video_processor import _dynamic_caption_filters
+        self.assertEqual(
+            _dynamic_caption_filters("one two", 1.0, {"enabled": False}),
+            [],
+        )
+
     def test_empty_timeline_still_returns_valid_plan(self):
         plan = build_retention_plan([], 30)
         self.assertEqual(plan["beats"], [])
