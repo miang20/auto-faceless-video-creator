@@ -179,7 +179,7 @@ def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=
         if not appended:
             break
 
-    passed = bool(sequence) and len(sequence) >= min(3, max_clips) and total >= min(target_duration * 0.55, target_duration - 1)
+    passed = bool(sequence) and len(sequence) >= min(2, max_clips) and total >= min(target_duration * 0.55, target_duration - 1)
     return {
         "version": "4.0",
         "success": passed,
@@ -196,7 +196,7 @@ def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=
             "rejected_candidates": len(candidates) - len(valid),
             "unique_clips": len(sequence),
             "minimum_duration_ratio": 0.55,
-            "minimum_clips": min(3, max_clips),
+            "minimum_clips": min(2, max_clips),
         },
         "editing_plan": {
             "vertical": True, "fast_cuts": True,
