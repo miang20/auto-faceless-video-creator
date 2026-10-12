@@ -60,3 +60,56 @@ def build_hook_overlay(style: str, topic: str, clip_text: str) -> str:
         if len(short_topic) <= 38:
             return short_topic
     return "WATCH THIS MOMENT"
+
+def build_retention_plan(timeline: list[dict], target_duration: float = 30.0) -> dict:
+    """Return an actionable retention blueprint tied to real selected moments."""
+    beats = []
+    for index, item in enumerate(timeline or []):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "MAIN").upper()
+        duration = item.get("target_screen_duration", item.get("duration", 0))
+        try:
+            duration = max(0.5, min(8.0, float(duration or 0)))
+        except (TypeError, ValueError):
+            duration = 3.0
+        if index == 0 or role == "HOOK":
+            purpose = "Pattern interrupt and immediate situation framing"
+        elif role == "SETUP":
+            purpose = "Minimum context; remove explanation that does not change understanding"
+        elif role in {"ESCALATION", "MAIN"}:
+            purpose = "Add new information, tension, or visual evidence; avoid repeating the prior beat"
+        elif role == "REACTION":
+            purpose = "Human response as emotional proof; preserve authentic source audio"
+        elif role == "PAYOFF":
+            purpose = "Close the open loop; show the complete real outcome"
+        elif role == "ENDING":
+            purpose = "End on the strongest consequence or natural visual loop"
+        else:
+            purpose = "Support the current beat without replacing the story"
+        beats.append({
+            "sequence": len(beats) + 1,
+            "role": role,
+            "duration_budget_seconds": round(duration, 2),
+            "retention_purpose": purpose,
+            "source_text": re.sub(r"\\s+", " ", str(item.get("text") or "")).strip()[:180],
+        })
+    return {
+        "model": "hook-context-escalation-open-loop-payoff",
+        "target_duration_seconds": round(max(0.0, float(target_duration or 0)), 2),
+        "beats": beats,
+        "rules": [
+            "Every beat must add new information, tension, reaction, or payoff.",
+            "Open loops must be resolved by the actual footage, never fabricated.",
+            "Preserve cause-and-effect order except for a brief, clearly contextualized payoff preview.",
+            "Keep original dialogue and natural audio when they carry the story.",
+            "Use a visual or audio change when attention would otherwise drift; do not cut mechanically.",
+            "Do not promise an outcome the selected footage does not show.",
+        ],
+        "quality_checks": [
+            "Hook is understandable without an intro.",
+            "Setup is shorter than the payoff whenever the footage allows.",
+            "No duplicated moment or repeated caption-only beat.",
+            "Final outcome is visible before the ending.",
+        ],
+    }
