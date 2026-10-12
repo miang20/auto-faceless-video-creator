@@ -470,9 +470,12 @@ def _dynamic_caption_filters(
         parts.append(f"enable='gte(t\\,{start:.3f})*lt(t\\,{end:.3f})'")
         return "=".join(parts[:1]) + "=" + ":".join(parts[1:])
 
-    # Cinematic subtitles use phrase-level captions; viral styles use active-word emphasis.
+    # Render each phrase exactly once. The former second drawtext pass placed
+    # a separately centered active word over an approximate phrase position,
+    # producing doubled/ghosted captions across the whole video. A clean,
+    # readable phrase is safer than a misaligned highlight overlay.
     words_per_group = 6 if style == "cinematic" else 3
-    use_active_word = style not in {"cinematic", "clean"}
+    caption_color = normal_color
     for group_start in range(0, len(words), words_per_group):
         group = words[group_start:group_start + words_per_group]
         first_index = group_start
@@ -480,22 +483,10 @@ def _dynamic_caption_filters(
         group_start_time = first_index * word_step
         group_end_time = min(duration, last_index * word_step)
         phrase = " ".join(group)
-
-        # Approximate text width so the active word overlays its place in the phrase.
-        phrase_width = sum(max(1, len(word)) * font_size * 0.54 for word in group)
-        phrase_width += max(0, len(group) - 1) * font_size * 0.32
-        phrase_x = f"(w-{phrase_width:.1f})/2"
-        filters.append(drawtext(phrase, normal_color, phrase_x, group_start_time, group_end_time))
-
-        if use_active_word:
-            prefix_width = 0.0
-            for offset, word in enumerate(group):
-                word_index = group_start + offset
-                word_start = word_index * word_step
-                word_end = min(duration, (word_index + 1) * word_step)
-                word_x = f"(w-{phrase_width:.1f})/2+{prefix_width:.1f}"
-                filters.append(drawtext(word, active_color, word_x, word_start, word_end))
-                prefix_width += max(1, len(word)) * font_size * 0.54 + font_size * 0.32
+        filters.append(drawtext(
+            phrase, caption_color, "(w-text_w)/2",
+            group_start_time, group_end_time
+        ))
 
     return filters
 
@@ -942,7 +933,10 @@ def _render_single_segment(
     )
 
     remove_silence = bool(editing_settings.get("remove_silence", False))
-    silences = _detect_internal_silence(segment_input_path, start, duration) if remove_silence else []
+    mute_source_audio = str(editing_settings.get("source_audio_mode", "keep_source")).lower() in {
+        "mute_source", "mute", "replace"
+    }
+    silences = _detect_internal_silence(segment_input_path, start, duration) if remove_silence and not mute_source_audio else []
     effective_duration = max(0.1, duration - sum(end - begin for begin, end in silences))
 
     caption_text_dir = None
@@ -992,7 +986,12 @@ def _render_single_segment(
         "-i", segment_input_path, "-t", f"{duration:.3f}",
     ]
 
-    if silences:
+    if mute_source_audio:
+        # Explicit full-track mute avoids carrying embedded old AI VO forward.
+        # It does not claim to separate narration from music/dialogue; any new
+        # narration must be supplied as a separate audio track by a later stage.
+        command.extend(["-vf", video_filter, "-an"])
+    elif silences:
         silence_expression = "+".join(
             f"between(t\\,{begin:.3f}\\,{end:.3f})"
             for begin, end in silences
@@ -1400,10 +1399,15 @@ def process_video(
                 f"segment_{index:03d}.mp4",
             )
 
+            # A hook/title belongs to the opening only. Segment-local timestamps
+            # restart at zero, so passing the title to every segment repeats it.
+            render_clip = dict(clip)
+            if index > 0:
+                render_clip["hook_text"] = ""
             _render_single_segment(
                 input_path=input_path,
                 output_path=segment_path,
-                clip=clip,
+                clip=render_clip,
                 output_width=output_width,
                 output_height=output_height,
                 fps=fps,
@@ -1432,8 +1436,15 @@ def process_video(
                 combined_path
             )
 
-            # Only trim when the story is materially longer than requested.
-            # We never pad a short video with meaningless content.
+            # Never silently publish an undersized timeline. Trimming is safe;
+            # padding a short story with frozen/duplicated footage is not.
+            minimum_duration = requested_duration * 0.90
+            if actual_duration < minimum_duration:
+                raise RuntimeError(
+                    f"Render timeline is too short ({actual_duration:.2f}s; "
+                    f"target {requested_duration:.2f}s, minimum accepted "
+                    f"{minimum_duration:.2f}s). Add relevant story beats before rendering."
+                )
             if actual_duration > requested_duration + 0.25:
 
                 trimmed_path = os.path.join(

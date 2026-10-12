@@ -75,8 +75,20 @@ def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=
         # Avoid making a video from random candidates when semantic relevance is weak.
         semantic = float(item.get("semantic_score", 0) or 0)
         source = float(item.get("source_score", 0) or 0)
-        if score < 0.18 and semantic < 0.12 and source < 0.12:
+        # A source-title/topic match alone is not proof that the actual shot
+        # illustrates this beat. Require footage/beat semantic evidence.
+        beat_text = str(item.get("beat_text") or item.get("requested_beat_text") or topic or "")
+        candidate_text = str(
+            item.get("transcript") or item.get("visual_description")
+            or item.get("text") or item.get("source_title") or ""
+        )
+        lexical_match = _similarity(candidate_text, beat_text)
+        if semantic < 0.12 and lexical_match < 0.10:
             continue
+        if score < 0.12 and semantic < 0.18 and lexical_match < 0.15:
+            continue
+        item = dict(item)
+        item["_lexical_match"] = round(lexical_match, 3)
         valid.append(item)
 
     if not valid:
@@ -179,7 +191,8 @@ def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=
         if not appended:
             break
 
-    passed = bool(sequence) and len(sequence) >= min(2, max_clips) and total >= min(target_duration * 0.55, target_duration - 1)
+    # Do not call a materially undersized montage a successful story plan.
+    passed = bool(sequence) and len(sequence) >= min(2, max_clips) and total >= target_duration * 0.90
     return {
         "version": "4.0",
         "success": passed,
@@ -195,7 +208,7 @@ def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=
             "eligible_candidates": len(valid),
             "rejected_candidates": len(candidates) - len(valid),
             "unique_clips": len(sequence),
-            "minimum_duration_ratio": 0.55,
+            "minimum_duration_ratio": 0.90,
             "minimum_clips": min(2, max_clips),
         },
         "editing_plan": {

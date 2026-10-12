@@ -23,6 +23,52 @@ class ProEditingTests(unittest.TestCase):
         self.assertEqual(plan["beats"][0]["role"], "HOOK")
         self.assertIn("never fabricated", plan["rules"][1])
 
+    def test_dynamic_captions_do_not_double_draw_active_words(self):
+        import tempfile
+        from core.video_processor import _dynamic_caption_filters
+
+        with tempfile.TemporaryDirectory() as directory:
+            filters = _dynamic_caption_filters(
+                "One two three four five six",
+                3.0,
+                {"enabled": True, "style": "Bold Viral"},
+                textfile_dir=directory,
+            )
+        # Two 3-word phrase groups should create two drawtext filters, not
+        # a phrase plus one overlay per active word.
+        self.assertEqual(len(filters), 2)
+        self.assertTrue(all("drawtext=" in item for item in filters))
+
+    def test_dynamic_captions_can_be_disabled(self):
+        from core.video_processor import _dynamic_caption_filters
+        self.assertEqual(
+            _dynamic_caption_filters("one two", 1.0, {"enabled": False}),
+            [],
+        )
+
+    def test_sequence_builder_rejects_unrelated_weak_candidates(self):
+        from core.sequence_builder import build_sequence
+        report = build_sequence({"content": {"topic": "warthog cheetah chase"}}, {"candidates": [{
+            "start": 0, "end": 4, "local_start": 0, "local_end": 4, "duration": 4,
+            "local_path": "/tmp/unrelated.mp4", "source_video_id": "unrelated",
+            "text": "women screaming in a car", "beat_text": "warthog cheetah chase",
+            "score": 0.9, "semantic_score": 0.0, "source_score": 1.0,
+        }]}, target_duration=10, max_clips=2)
+        self.assertFalse(report["success"])
+        self.assertEqual(report["clip_count"], 0)
+
+    def test_sequence_builder_rejects_short_sequence(self):
+        from core.sequence_builder import build_sequence
+        candidates = [{
+            "start": i * 5, "end": i * 5 + 3, "local_start": 0, "local_end": 3,
+            "duration": 3, "local_path": f"/tmp/clip{i}.mp4",
+            "source_video_id": f"source{i}", "text": "basketball dunk",
+            "beat_text": "basketball dunk", "score": 0.9, "semantic_score": 0.8,
+            "source_score": 0.8,
+        } for i in range(2)]
+        report = build_sequence({"content": {"topic": "basketball"}}, {"candidates": candidates}, target_duration=10, max_clips=4)
+        self.assertFalse(report["success"])
+
     def test_empty_timeline_still_returns_valid_plan(self):
         plan = build_retention_plan([], 30)
         self.assertEqual(plan["beats"], [])

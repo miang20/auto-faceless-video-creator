@@ -577,6 +577,12 @@ def run_video_processing(
     editing["make_vertical"] = use_vertical
     editing["output_format"] = "vertical" if use_vertical else "landscape"
     editing.setdefault("audio_normalize", editing.get("normalize_audio", True))
+    # Embedded narration cannot be reliably separated from music/dialogue by
+    # volume filters. Only mute the complete source track on explicit user choice.
+    editing["source_audio_mode"] = str(
+        editing.get("source_audio_mode")
+        or ("mute_source" if "mute source audio" in str(editing.get("voiceover_mode", "")).lower() else "keep_source")
+    ).strip().lower()
     captions = dict(caption_settings or {})
     captions.setdefault("enabled", True)
     captions.setdefault("style", caption_style or "Bold Viral")
@@ -591,11 +597,14 @@ def run_video_processing(
     if not Path(rendered_path).is_file() or Path(rendered_path).stat().st_size <= 0:
         raise RuntimeError(f"Renderer returned without a valid MP4: {rendered_path}")
     actual_duration = float(_probe_duration(rendered_path))
-    expected_floor = min(requested * 0.65, source_duration * 0.75) if requested and source_duration else 0.0
+    # The renderer must not mark a materially short timeline as successful.
+    # Compare against the requested duration, capped by actual source duration.
+    expected_floor = min(requested, source_duration) * 0.90 if requested and source_duration else 0.0
     if expected_floor > 0 and actual_duration < expected_floor:
         raise RuntimeError(
-            f"Final render is too short ({actual_duration:.2f}s; expected at least "
-            f"{expected_floor:.2f}s). Refusing to mark this job completed."
+            f"Final render failed duration QC ({actual_duration:.2f}s; expected at least "
+            f"{expected_floor:.2f}s for a {requested:.2f}s target). "
+            "Refusing to mark this job completed; inspect clip selection and timeline assembly."
         )
     return {
         "success": True, "output_path": rendered_path,
