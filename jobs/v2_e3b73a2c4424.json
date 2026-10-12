@@ -1,7 +1,7 @@
 {
   "job_id": "v2_e3b73a2c4424",
   "created_at": "2026-10-12T09:24:23.866439+00:00",
-  "status": "queued",
+  "status": "running",
   "pipeline": "video",
   "pipeline_version": "2.0",
   "input_value": "https://youtube.com/shorts/FvXirtO5k6w?si=6CDhd_4ud_8ByxI5",
@@ -50,6 +50,6 @@
     "sound_design": true,
     "hook_requires_footage_match": true
   },
-  "error": "Recovered after worker restart; retrying automatically.",
-  "updated_at": "2026-10-12T11:56:28.619564Z"
+  "error": null,
+  "updated_at": "2026-10-12T11:58:14.246074Z"
 }
