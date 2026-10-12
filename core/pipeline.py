@@ -17,6 +17,7 @@ from core.clip_analyzer import build_clip_analysis_report
 from core.video_processor import process_video
 from core.script_generator import build_script
 from core.pro_editing import build_hook_overlay
+from core.reference_intelligence import analyze_reference, plan_source_sections
 
 
 PIPELINE_VERSION = "2.0"
@@ -676,6 +677,25 @@ def run_video_pipeline(
     editing_settings.setdefault("topic", str(topic or Path(video_path).stem))
 
     # -----------------------------------------------------
+    # 0. REFERENCE INTELLIGENCE
+    # -----------------------------------------------------
+    # Analyze the user-supplied reference once and persist the evidence used by
+    # research/sequence selection. This does not change core/downloader.py.
+    reference_profile = analyze_reference(reference_url, topic or "")
+    reference_profile_path = save_json(
+        reference_profile,
+        output / f"{pipeline_id}_reference_profile.json",
+    )
+    reference_keywords = reference_profile.get("keywords", [])
+    if reference_keywords:
+        editing_settings["reference_keywords"] = reference_keywords
+    if reference_profile.get("success"):
+        editing_settings["reference_title"] = reference_profile.get("title", "")
+        editing_settings["reference_duration"] = reference_profile.get("duration", 0)
+        editing_settings["reference_chapters"] = reference_profile.get("chapters", [])
+
+
+    # -----------------------------------------------------
     # 1. RESEARCH
     # -----------------------------------------------------
 
@@ -917,7 +937,15 @@ def run_video_pipeline(
                     ]
                 )),
             },
-            "peak_moments": _build_peak_moments(raw_beats),
+            "peak_moments": (
+                _build_peak_moments(raw_beats)
+                + [
+                    {"index": 1000 + i, "text": str(chapter.get("text") or ""),
+                     "role": "REFERENCE_CHAPTER"}
+                    for i, chapter in enumerate(reference_profile.get("chapters", []))
+                    if isinstance(chapter, dict) and str(chapter.get("text") or "").strip()
+                ]
+            ),
         }
 
         downloaded = 0
@@ -925,7 +953,7 @@ def run_video_pipeline(
         # Failed/too-short sources are skipped; the frozen core downloader
         # and the existing pipeline fallback remain unchanged.
         for item in sources:
-            for start, end in ((0, 10), (10, 20), (20, 30)):
+            for start, end in plan_source_sections(item, max_sections=3, section_seconds=8.0):
                 try:
                     result_path = download_section(
                         url=item["url"],
@@ -1100,6 +1128,7 @@ def run_video_pipeline(
             "script": script_path,
             "transcript": transcript_path,
             "clip_analysis": clip_analysis_path,
+            "reference_profile": reference_profile_path,
         },
     }
 
