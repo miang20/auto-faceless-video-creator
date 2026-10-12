@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from core.job_runner import _copy_final_video_to_phone
+from core.phone_export import copy_final_video_to_phone
 
 
 def test_phone_export_copies_and_verifies_final_mp4(tmp_path):
@@ -9,7 +9,7 @@ def test_phone_export_copies_and_verifies_final_mp4(tmp_path):
     source.write_bytes(payload)
     phone_home = tmp_path / "termux-home"
 
-    copied = _copy_final_video_to_phone(
+    copied = copy_final_video_to_phone(
         {"output_path": str(source)},
         tmp_path / "outputs",
         home_dir=phone_home,
