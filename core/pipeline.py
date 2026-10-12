@@ -997,26 +997,22 @@ def run_video_pipeline(
                     sequence_report.get("estimated_duration", 0),
                 )
             else:
-                # Never silently turn an invalid external selection into a montage
-                # of unrelated original clips. A failed story gate must fail closed.
-                print("[V2 SEQUENCE] Quality gate failed; refusing unrelated fallback footage.")
-                render_analysis = {
-                    "clips": [],
-                    "sequence": [],
-                    "sequence_report": sequence_report,
-                    "candidate_report": candidate_report,
-                    "quality_gate_failed": True,
-                    "quality_gate_reason": sequence_report.get("reason", "No valid coherent sequence"),
-                }
+                # External discovery is optional. Keep the already analyzed local
+                # story timeline; never erase it merely because research footage
+                # failed its quality gate.
+                reason = sequence_report.get("reason", "No valid coherent external sequence")
+                print("[V2 SEQUENCE] External quality gate failed; preserving local story fallback:", reason)
+                render_analysis["sequence_report"] = sequence_report
+                render_analysis["candidate_report"] = candidate_report
+                render_analysis["quality_gate_failed"] = True
+                render_analysis["quality_gate_reason"] = reason
                 clip_analysis["sequence_report"] = sequence_report
         else:
-            print("[V2 SEQUENCE] Insufficient sections/beats; refusing unverified fallback footage.")
-            render_analysis = {
-                "clips": [],
-                "sequence": [],
-                "quality_gate_failed": True,
-                "quality_gate_reason": "Insufficient source sections or story beats",
-            }
+            # No external sections/beats is not a reason to blank a valid local
+            # edit blueprint prepared above.
+            print("[V2 SEQUENCE] Insufficient external sections/beats; preserving local story fallback.")
+            render_analysis["quality_gate_failed"] = True
+            render_analysis["quality_gate_reason"] = "Insufficient source sections or story beats"
 
     except Exception as integration_error:
         # Keep the story-timeline fallback already prepared above. Reverting

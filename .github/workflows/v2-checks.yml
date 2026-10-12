@@ -9,6 +9,7 @@ on:
 jobs:
   syntax-and-unit-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -16,10 +17,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install FFmpeg for real render verification
+      - name: Ensure FFmpeg is available for real render verification
+        timeout-minutes: 5
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          if command -v ffmpeg >/dev/null 2>&1; then
+            ffmpeg -version | head -n 2
+          else
+            sudo apt-get update -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20
+            sudo apt-get install -y --no-install-recommends -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 ffmpeg
+          fi
+          ffmpeg -version | head -n 2
       - name: Compile Python modules
         run: python -m compileall -q app.py core tests
       - name: Check Termux script syntax

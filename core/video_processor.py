@@ -470,22 +470,16 @@ def _dynamic_caption_filters(
         parts.append(f"enable='gte(t\\,{start:.3f})*lt(t\\,{end:.3f})'")
         return "=".join(parts[:1]) + "=" + ":".join(parts[1:])
 
-    # Render each phrase exactly once. The former second drawtext pass placed
-    # a separately centered active word over an approximate phrase position,
-    # producing doubled/ghosted captions across the whole video. A clean,
-    # readable phrase is safer than a misaligned highlight overlay.
-    words_per_group = 6 if style == "cinematic" else 3
-    caption_color = normal_color
-    for group_start in range(0, len(words), words_per_group):
-        group = words[group_start:group_start + words_per_group]
-        first_index = group_start
-        last_index = group_start + len(group)
-        group_start_time = first_index * word_step
-        group_end_time = min(duration, last_index * word_step)
-        phrase = " ".join(group)
+    # Karaoke captions: render one centered word at a time, with the active
+    # word in the configured highlight color. This avoids the old misaligned
+    # overlay bug while ensuring the yellow word is genuinely burned into video.
+    # Each word keeps its punctuation and occupies a precisely timed interval.
+    for index, word in enumerate(words):
+        word_start = index * word_step
+        word_end = duration if index == len(words) - 1 else (index + 1) * word_step
         filters.append(drawtext(
-            phrase, caption_color, "(w-text_w)/2",
-            group_start_time, group_end_time
+            word, active_color, "(w-text_w)/2",
+            word_start, word_end
         ))
 
     return filters
@@ -1436,9 +1430,12 @@ def process_video(
                 combined_path
             )
 
-            # Never silently publish an undersized timeline. Trimming is safe;
-            # padding a short story with frozen/duplicated footage is not.
-            minimum_duration = requested_duration * 0.90
+            # Silence removal intentionally shortens the assembled timeline.
+            # Permit up to 25% removal when that feature is enabled, while
+            # retaining the strict 90% floor for ordinary renders. Never pad
+            # with frozen or duplicated footage to fake the target runtime.
+            silence_trim_enabled = bool(editing.get("remove_silence", False))
+            minimum_duration = requested_duration * (0.75 if silence_trim_enabled else 0.90)
             if actual_duration < minimum_duration:
                 raise RuntimeError(
                     f"Render timeline is too short ({actual_duration:.2f}s; "
