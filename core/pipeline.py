@@ -577,6 +577,12 @@ def run_video_processing(
     editing["make_vertical"] = use_vertical
     editing["output_format"] = "vertical" if use_vertical else "landscape"
     editing.setdefault("audio_normalize", editing.get("normalize_audio", True))
+    # Embedded narration cannot be reliably separated from music/dialogue by
+    # volume filters. Only mute the complete source track on explicit user choice.
+    editing["source_audio_mode"] = str(
+        editing.get("source_audio_mode")
+        or ("mute_source" if "mute source audio" in str(editing.get("voiceover_mode", "")).lower() else "keep_source")
+    ).strip().lower()
     captions = dict(caption_settings or {})
     captions.setdefault("enabled", True)
     captions.setdefault("style", caption_style or "Bold Viral")
