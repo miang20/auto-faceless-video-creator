@@ -26,7 +26,7 @@ def test_phone_export_copies_and_verifies_final_mp4(tmp_path):
 
 
 def test_phone_export_does_not_claim_success_without_a_final_file(tmp_path):
-    copied = _copy_final_video_to_phone(
+    copied = copy_final_video_to_phone(
         {"output_path": str(tmp_path / "missing.mp4")},
         tmp_path / "outputs",
         home_dir=tmp_path / "termux-home",
