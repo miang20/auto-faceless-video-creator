@@ -740,7 +740,6 @@ def _vertical_crop_filter(
     output_width: int,
     output_height: int,
     subject_track: Optional[List[Tuple[float, float]]] = None,
-    hook_text: str = "",
 ) -> str:
 
     if width <= 0 or height <= 0:
