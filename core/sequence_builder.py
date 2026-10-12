@@ -77,8 +77,11 @@ def build_sequence(profile, clip_analysis, target_duration=60, editing_settings=
         source = float(item.get("source_score", 0) or 0)
         # A source-title/topic match alone is not proof that the actual shot
         # illustrates this beat. Require footage/beat semantic evidence.
-        beat_text = str(item.get("beat_text") or item.get("text") or "")
-        candidate_text = str(item.get("transcript") or item.get("visual_description") or item.get("text") or "")
+        beat_text = str(item.get("beat_text") or item.get("requested_beat_text") or topic or "")
+        candidate_text = str(
+            item.get("transcript") or item.get("visual_description")
+            or item.get("text") or item.get("source_title") or ""
+        )
         lexical_match = _similarity(candidate_text, beat_text)
         if semantic < 0.12 and lexical_match < 0.10:
             continue
