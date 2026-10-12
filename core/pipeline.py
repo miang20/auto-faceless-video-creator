@@ -931,6 +931,11 @@ def run_video_pipeline(
                     ]
                     + [
                         str(keyword).strip(".,!?;:")
+                        for keyword in reference_keywords
+                        if len(str(keyword).strip(".,!?;:")) > 2
+                    ]
+                    + [
+                        str(keyword).strip(".,!?;:")
                         for source in sources
                         for keyword in (source.get("keywords", []) or [])
                         if len(str(keyword).strip(".,!?;:")) > 2
