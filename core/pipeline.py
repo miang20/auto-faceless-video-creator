@@ -540,7 +540,7 @@ def run_video_processing(
 
     # Discover and download context-matched B-roll automatically; gracefully fall back.
     broll_report = {"enabled": False, "inserted": 0, "status": "disabled"}
-    if bool(editing_settings.get("contextual_broll", editing_settings.get("use_broll", True))):
+    if bool(editing_settings.get("contextual_broll", editing_settings.get("use_broll", False))):
         try:
             from core.contextual_broll import insert_contextual_broll
             timeline, broll_report = insert_contextual_broll(
