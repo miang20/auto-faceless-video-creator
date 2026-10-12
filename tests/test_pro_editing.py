@@ -34,10 +34,11 @@ class ProEditingTests(unittest.TestCase):
                 {"enabled": True, "style": "Bold Viral"},
                 textfile_dir=directory,
             )
-        # Two 3-word phrase groups should create two drawtext filters, not
-        # a phrase plus one overlay per active word.
-        self.assertEqual(len(filters), 2)
+        # Karaoke mode renders each active word once, sequentially. There
+        # must be no duplicate phrase/word overlay that creates ghost captions.
+        self.assertEqual(len(filters), 6)
         self.assertTrue(all("drawtext=" in item for item in filters))
+        self.assertTrue(all("fontcolor=yellow" in item for item in filters))
 
     def test_dynamic_captions_can_be_disabled(self):
         from core.video_processor import _dynamic_caption_filters
