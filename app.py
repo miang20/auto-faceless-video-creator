@@ -481,6 +481,7 @@ voiceover_mode = st.selectbox(
         "Auto — decide from footage and original audio",
         "Keep original audio; no added VO",
         "Add narration when supported",
+        "Mute source audio (remove embedded narration)",
     ],
     help="Auto should prefer clear original dialogue/action audio and only request generated narration when a configured speech engine is available.",
 )
@@ -608,6 +609,7 @@ with st.expander("🎞️ Editing Settings", expanded=True):
         "target_duration": int(duration),
         "hook_style": hook_style,
         "voiceover_mode": voiceover_mode,
+        "source_audio_mode": "mute_source" if voiceover_mode == "Mute source audio (remove embedded narration)" else "keep_source",
         "professional_finish": True,
         "color_correction": True,
         "sound_design": True,
