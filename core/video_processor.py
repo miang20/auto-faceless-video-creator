@@ -804,6 +804,7 @@ def _build_video_filter(
     caption_text: str = "",
     caption_text_dir: Optional[str] = None,
     subject_track: Optional[List[Tuple[float, float]]] = None,
+    hook_text: str = "",
 ) -> str:
 
     filters = []
