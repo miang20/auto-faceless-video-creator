@@ -17,6 +17,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
+from core.pro_editing import build_retention_plan
+
 
 DEFAULT_TARGET_DURATION = 15.0
 
@@ -635,6 +637,7 @@ def generate_script(
             ),
             "avoid_rigid_cuts": True,
         },
+        "retention_plan": build_retention_plan(timeline, target_duration),
         "context_summary": _build_context_summary(
             selected
         ),
