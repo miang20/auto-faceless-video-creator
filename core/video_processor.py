@@ -1223,7 +1223,7 @@ def _concat_segments(
         # dialogue/ambience. Silent or explicitly muted edits skip audio filters.
         if (
             bool(editing_settings.get("audio_normalize", editing_settings.get("normalize_audio", True)))
-            and _probe_has_audio(combined_path)
+            and any(_probe_has_audio(path) for path in segment_paths)
         ):
             command[-1:-1] = ["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"]
 
