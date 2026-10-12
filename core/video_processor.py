@@ -118,6 +118,22 @@ def _probe_duration(video_path: str) -> float:
         return 0.0
 
 
+def _probe_has_audio(video_path: str) -> bool:
+    """Return whether the rendered file contains an audio stream."""
+    try:
+        result = _run_command(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "default=noprint_wrappers=1:nokey=1", video_path,
+            ],
+            timeout=15,
+        )
+        return result.returncode == 0 and "audio" in (result.stdout or "").lower()
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _probe_dimensions(
     video_path: str,
 ) -> Tuple[int, int]:
@@ -1201,6 +1217,15 @@ def _concat_segments(
             "+faststart",
             output_path,
         ]
+
+        # Master the assembled soundtrack after concat as well as per segment.
+        # This evens out loudness jumps between clips while preserving original
+        # dialogue/ambience. Silent or explicitly muted edits skip audio filters.
+        if (
+            bool(editing_settings.get("audio_normalize", editing_settings.get("normalize_audio", True)))
+            and _probe_has_audio(combined_path)
+        ):
+            command[-1:-1] = ["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"]
 
         result = _run_command(
             command,
