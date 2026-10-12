@@ -96,7 +96,7 @@ def insert_contextual_broll(
         if len(_tokens(query)) < 3:
             continue
         selected.append((index, item, query))
-        if len(selected) >= min(max_broll, 2):
+        if len(selected) >= min(max_broll, 3):
             break
 
     excluded = set()
