@@ -933,7 +933,10 @@ def _render_single_segment(
     )
 
     remove_silence = bool(editing_settings.get("remove_silence", False))
-    silences = _detect_internal_silence(segment_input_path, start, duration) if remove_silence else []
+    mute_source_audio = str(editing_settings.get("source_audio_mode", "keep_source")).lower() in {
+        "mute_source", "mute", "replace"
+    }
+    silences = _detect_internal_silence(segment_input_path, start, duration) if remove_silence and not mute_source_audio else []
     effective_duration = max(0.1, duration - sum(end - begin for begin, end in silences))
 
     caption_text_dir = None
@@ -983,7 +986,12 @@ def _render_single_segment(
         "-i", segment_input_path, "-t", f"{duration:.3f}",
     ]
 
-    if silences:
+    if mute_source_audio:
+        # Explicit full-track mute avoids carrying embedded old AI VO forward.
+        # It does not claim to separate narration from music/dialogue; any new
+        # narration must be supplied as a separate audio track by a later stage.
+        command.extend(["-vf", video_filter, "-an"])
+    elif silences:
         silence_expression = "+".join(
             f"between(t\\,{begin:.3f}\\,{end:.3f})"
             for begin, end in silences
