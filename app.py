@@ -574,6 +574,20 @@ with st.expander("🎞️ Editing Settings", expanded=True):
             value=True,
         )
 
+        impact_shake = st.checkbox(
+            "Natural Impact Shake",
+            value=True,
+            help="Subtle motion only on hook, reaction, and payoff moments.",
+        )
+
+        max_broll_clips = st.slider(
+            "Auto B-roll Cutaways",
+            min_value=1,
+            max_value=3,
+            value=2,
+            help="Automatically discover and download relevant supplementary shots.",
+        )
+
     editing_settings = {
         "dynamic_zoom": dynamic_zoom,
         "remove_silence": remove_silence,
@@ -581,6 +595,8 @@ with st.expander("🎞️ Editing Settings", expanded=True):
         "contextual_broll": contextual_broll,
         "reaction_selection": reaction_selection,
         "visual_change_rhythm": visual_change_rhythm,
+        "impact_shake": impact_shake,
+        "max_broll_clips": int(max_broll_clips),
         "max_visual_segment_seconds": 4.0,
         "smart_subject_tracking": True,
         "make_vertical": is_vertical,

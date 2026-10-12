@@ -16,6 +16,7 @@ from core.transcription import (
 from core.clip_analyzer import build_clip_analysis_report
 from core.video_processor import process_video
 from core.script_generator import build_script
+from core.pro_editing import build_hook_overlay
 
 
 PIPELINE_VERSION = "2.0"
@@ -527,6 +528,31 @@ def run_video_processing(
             f"({fallback_total:.2f}s); pass-through source output blocked."
         )
 
+    # Put a grounded on-screen hook over the first actual rendered shot.
+    if timeline:
+        first = timeline[0]
+        if not str(first.get("hook_text") or "").strip():
+            first["hook_text"] = build_hook_overlay(
+                str(editing_settings.get("hook_style") or "Auto / Best for this footage"),
+                str(editing_settings.get("topic") or Path(source_path).stem),
+                str(first.get("text") or ""),
+            )
+
+    # Discover and download context-matched B-roll automatically; gracefully fall back.
+    broll_report = {"enabled": False, "inserted": 0, "status": "disabled"}
+    if bool(editing_settings.get("contextual_broll", editing_settings.get("use_broll", False))):
+        try:
+            from core.contextual_broll import insert_contextual_broll
+            timeline, broll_report = insert_contextual_broll(
+                timeline=timeline, topic=str(editing_settings.get("topic") or Path(source_path).stem),
+                target_duration=int(duration or 30),
+                max_broll=int(editing_settings.get("max_broll_clips", 2) or 2),
+            )
+            print("[V2 BROLL] %s: inserted=%s" % (broll_report.get("status"), broll_report.get("inserted", 0)))
+        except Exception as broll_error:
+            broll_report = {"enabled": True, "inserted": 0, "status": "fallback", "warnings": [str(broll_error)[:240]]}
+            print("[V2 BROLL] Non-fatal fallback:", str(broll_error)[:180])
+
     captions_enabled = (
         isinstance(caption_settings, dict)
         and caption_settings.get("enabled", True) is not False
@@ -578,6 +604,8 @@ def run_video_processing(
         "selected_clips": selected_clip_count,
         "render_segments": len(timeline),
         "distinct_source_files": len({x["path"] for x in timeline}),
+        "broll": broll_report,
+        "hook_overlay": str(timeline[0].get("hook_text") or "") if timeline else "",
     }
 
 
@@ -634,8 +662,9 @@ def run_video_pipeline(
 
     video_path = str(video_path)
 
-    caption_settings = caption_settings or {}
-    editing_settings = editing_settings or {}
+    caption_settings = dict(caption_settings or {})
+    editing_settings = dict(editing_settings or {})
+    editing_settings.setdefault("topic", str(topic or Path(video_path).stem))
 
     # -----------------------------------------------------
     # 1. RESEARCH
