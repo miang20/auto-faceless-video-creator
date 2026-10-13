@@ -1,7 +1,7 @@
 {
   "job_id": "v2_bbf5acca4447",
   "created_at": "2026-10-12T11:59:27.057415+00:00",
-  "status": "running",
+  "status": "completed",
   "pipeline": "video",
   "pipeline_version": "2.0",
   "input_value": "https://youtube.com/shorts/FvXirtO5k6w?si=8nWMLKeGyC2ZJW1m",
@@ -51,5 +51,13 @@
     "hook_requires_footage_match": true
   },
   "error": null,
-  "updated_at": "2026-10-13T16:27:52.881192Z"
+  "updated_at": "2026-10-13T16:46:25.745681Z",
+  "result_path": "/data/data/com.termux/files/home/v2-test/output/jobs/final_FvXirtO5k6w.mp4",
+  "output_path": "/data/data/com.termux/files/home/v2-test/output/jobs/final_FvXirtO5k6w.mp4",
+  "size_bytes": 30091753,
+  "duration_seconds": 40.0,
+  "resolution": "1080x1920",
+  "fps": "1199/40",
+  "phone_copy_path": "/data/data/com.termux/files/home/storage/shared/Movies/AutoFaceless/final_FvXirtO5k6w.mp4",
+  "pipeline_result_path": "/data/data/com.termux/files/home/v2-test/output/jobs/v2_bbf5acca4447_result.json"
 }
